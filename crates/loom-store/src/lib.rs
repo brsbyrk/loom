@@ -585,21 +585,13 @@ mod tests {
                 operator: loom_core::ComparisonOp::Gt,
                 value: 10000.0,
             }],
-            cost: vec![NamedEffect {
-                attribute: "health.stress".into(),
-                delta: -20.0,
-                scaling: vec![],
-            }],
+            cost: vec![NamedEffect::fixed("health.stress", -20.0)],
             outcomes: vec![NamedOutcome {
                 label: "Freedom".into(),
                 weight: 100.0,
                 condition: None,
                 transform: NamedTransform::Declarative {
-                    effects: vec![NamedEffect {
-                        attribute: "wealth.cash".into(),
-                        delta: -50000.0,
-                        scaling: vec![],
-                    }],
+                    effects: vec![NamedEffect::fixed("wealth.cash", -50000.0)],
                     conditional: vec![],
                     default_conditional: vec![],
                 },
@@ -629,11 +621,7 @@ mod tests {
             id: "salary".into(),
             label: "Monthly salary".into(),
             frequency: NamedFrequency::EveryStep,
-            effects: vec![NamedEffect {
-                attribute: "wealth.cash".into(),
-                delta: 3333.33,
-                scaling: vec![],
-            }],
+            effects: vec![NamedEffect::fixed("wealth.cash", 3333.33)],
         };
 
         store.upsert_passive("test", &passive).unwrap();

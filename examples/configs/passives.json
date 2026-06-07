@@ -17,7 +17,7 @@
   },
   {
     "id": "health_maintenance",
-    "label": "Health maintenance check",
+    "label": "Health damage from high stress",
     "frequency": {
       "type": "when",
       "attribute": "health.stress",
@@ -26,6 +26,14 @@
     },
     "effects": [
       {"attribute": "health.physical", "delta": -0.5}
+    ]
+  },
+  {
+    "id": "living_expenses",
+    "label": "Living expenses (all wealth groups)",
+    "frequency": {"type": "everystep"},
+    "effects": [
+      {"group": "wealth", "delta": -250}
     ]
   }
 ]

@@ -22,15 +22,24 @@ use serde::{Deserialize, Serialize};
 
 // ── Resolve error ────────────────────────────────────────────────────────────────────
 
-/// Error when a named attribute reference can't be found in the schema.
+/// Error when a named reference can't be resolved.
 #[derive(Debug)]
-pub struct ResolveError {
-    pub name: String,
+pub enum ResolveError {
+    /// Referenced attribute name not found in schema.
+    UnknownAttribute(String),
+    /// Referenced group name not found or has no attributes.
+    UnknownGroup(String),
+    /// Neither attribute nor group was specified.
+    NoTarget,
 }
 
 impl std::fmt::Display for ResolveError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "unknown attribute: '{}'", self.name)
+        match self {
+            ResolveError::UnknownAttribute(name) => write!(f, "unknown attribute: '{name}'"),
+            ResolveError::UnknownGroup(name) => write!(f, "unknown or empty group: '{name}'"),
+            ResolveError::NoTarget => write!(f, "effect must specify 'attribute' or 'group'"),
+        }
     }
 }
 
@@ -41,7 +50,7 @@ impl std::error::Error for ResolveError {}
 fn resolve_attr(schema: &AttributeSchema, name: &str) -> Result<usize, ResolveError> {
     schema
         .index_of(name)
-        .ok_or_else(|| ResolveError { name: name.into() })
+        .ok_or_else(|| ResolveError::UnknownAttribute(name.into()))
 }
 
 // ── NamedCondition ───────────────────────────────────────────────────────────────────
@@ -68,10 +77,31 @@ impl NamedCondition {
 
 // ── NamedEffect ──────────────────────────────────────────────────────────────────────
 
+/// A named attribute effect — can target a single attribute or an entire group.
+///
+/// Either `attribute` or `group` must be set. If `group` is set, the effect is
+/// duplicated for every attribute in that group. The `delta` and `scaling` are
+/// applied identically to each target.
+///
+/// # Examples (JSON)
+///
+/// ```json
+/// {"attribute": "wealth.cash", "delta": 5000}
+/// ```
+/// → affects only wealth.cash.
+///
+/// ```json
+/// {"group": "wealth", "delta": -500}
+/// ```
+/// → affects wealth.cash, wealth.stocks, wealth.house_value, wealth.debt.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct NamedEffect {
-    /// Attribute name (e.g., "wealth.cash").
-    pub attribute: String,
+    /// Attribute name (e.g., "wealth.cash"). Set for single-attribute targeting.
+    #[serde(default)]
+    pub attribute: Option<String>,
+    /// Group name (e.g., "wealth"). Set to target all attributes in a group.
+    #[serde(default)]
+    pub group: Option<String>,
     /// Base additive delta.
     #[serde(default)]
     pub delta: f64,
@@ -81,19 +111,73 @@ pub struct NamedEffect {
 }
 
 impl NamedEffect {
-    pub fn resolve(&self, schema: &AttributeSchema) -> Result<AttributeEffect, ResolveError> {
-        let attribute_index = resolve_attr(schema, &self.attribute)?;
-        let scaling = self
+    /// Create a simple fixed-delta effect on a single attribute.
+    pub fn fixed(attribute: impl Into<String>, delta: f64) -> Self {
+        Self {
+            attribute: Some(attribute.into()),
+            group: None,
+            delta,
+            scaling: vec![],
+        }
+    }
+
+    /// Create a simple fixed-delta effect on an entire group.
+    pub fn group_fixed(group: impl Into<String>, delta: f64) -> Self {
+        Self {
+            attribute: None,
+            group: Some(group.into()),
+            delta,
+            scaling: vec![],
+        }
+    }
+
+    /// Resolve to one or more engine-level `AttributeEffect`s.
+    ///
+    /// If `group` is set, returns one effect per attribute in the group.
+    /// If `attribute` is set, returns a single effect.
+    /// If neither is set, returns `ResolveError::NoTarget`.
+    pub fn resolve(&self, schema: &AttributeSchema) -> Result<Vec<AttributeEffect>, ResolveError> {
+        // Resolve scaling sources once (same for all targets)
+        let scaling: Vec<(usize, f64)> = self
             .scaling
             .iter()
             .map(|(name, mult)| resolve_attr(schema, name).map(|i| (i, *mult)))
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(AttributeEffect {
-            attribute_index,
-            delta: self.delta,
-            scaling,
-        })
+
+        let indices: Vec<usize> = if let Some(ref group) = self.group {
+            let idxs = schema.group_indices(group);
+            if idxs.is_empty() {
+                return Err(ResolveError::UnknownGroup(group.clone()));
+            }
+            idxs
+        } else if let Some(ref attr) = self.attribute {
+            vec![resolve_attr(schema, attr)?]
+        } else {
+            return Err(ResolveError::NoTarget);
+        };
+
+        Ok(indices
+            .into_iter()
+            .map(|attribute_index| AttributeEffect {
+                attribute_index,
+                delta: self.delta,
+                scaling: scaling.clone(),
+            })
+            .collect())
     }
+}
+
+/// Resolve a slice of `NamedEffect`s, flattening group expansions into a flat
+/// `Vec<AttributeEffect>`.
+fn resolve_effects(
+    effects: &[NamedEffect],
+    schema: &AttributeSchema,
+) -> Result<Vec<AttributeEffect>, ResolveError> {
+    effects
+        .iter()
+        .map(|e| e.resolve(schema))
+        .collect::<Result<Vec<Vec<_>>, _>>()
+        .map(|v| v.into_iter().flatten().collect())
 }
 
 // ── NamedTransform ───────────────────────────────────────────────────────────────────
@@ -124,25 +208,16 @@ impl NamedTransform {
                 conditional,
                 default_conditional,
             } => {
-                let resolved_effects = effects
-                    .iter()
-                    .map(|e| e.resolve(schema))
-                    .collect::<Result<Vec<_>, _>>()?;
+                let resolved_effects = resolve_effects(effects, schema)?;
                 let resolved_conditional = conditional
                     .iter()
                     .map(|(cond, effs)| {
                         let c = cond.resolve(schema)?;
-                        let e = effs
-                            .iter()
-                            .map(|e| e.resolve(schema))
-                            .collect::<Result<Vec<_>, _>>()?;
+                        let e = resolve_effects(effs, schema)?;
                         Ok((c, e))
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                let resolved_default = default_conditional
-                    .iter()
-                    .map(|e| e.resolve(schema))
-                    .collect::<Result<Vec<_>, _>>()?;
+                let resolved_default = resolve_effects(default_conditional, schema)?;
                 Ok(Transform::Declarative {
                     effects: resolved_effects,
                     conditional: resolved_conditional,
@@ -213,11 +288,7 @@ impl NamedDecision {
             .iter()
             .map(|c| c.resolve(schema))
             .collect::<Result<Vec<_>, _>>()?;
-        let cost = self
-            .cost
-            .iter()
-            .map(|e| e.resolve(schema))
-            .collect::<Result<Vec<_>, _>>()?;
+        let cost = resolve_effects(&self.cost, schema)?;
         let outcomes = self
             .outcomes
             .iter()
@@ -269,11 +340,7 @@ pub struct NamedPassiveEffect {
 
 impl NamedPassiveEffect {
     pub fn resolve(&self, schema: &AttributeSchema) -> Result<PassiveEffect, ResolveError> {
-        let effects = self
-            .effects
-            .iter()
-            .map(|e| e.resolve(schema))
-            .collect::<Result<Vec<_>, _>>()?;
+        let effects = resolve_effects(&self.effects, schema)?;
         Ok(PassiveEffect {
             id: self.id.clone(),
             label: self.label.clone(),
@@ -388,26 +455,73 @@ mod tests {
     fn resolve_effect_by_name() {
         let schema = test_schema();
         let named = NamedEffect {
-            attribute: "wealth.cash".into(),
+            attribute: Some("wealth.cash".into()),
+            group: None,
             delta: 1000.0,
             scaling: vec![],
         };
-        let effect = named.resolve(&schema).unwrap();
-        assert_eq!(effect.attribute_index, 0);
-        assert_eq!(effect.delta, 1000.0);
+        let effects = named.resolve(&schema).unwrap();
+        assert_eq!(effects.len(), 1);
+        assert_eq!(effects[0].attribute_index, 0);
+        assert_eq!(effects[0].delta, 1000.0);
     }
 
     #[test]
     fn resolve_effect_with_scaling_by_name() {
         let schema = test_schema();
         let named = NamedEffect {
-            attribute: "health.stress".into(),
+            attribute: Some("health.stress".into()),
+            group: None,
             delta: 10.0,
             scaling: vec![("health.stress".into(), 0.5)],
         };
-        let effect = named.resolve(&schema).unwrap();
-        assert_eq!(effect.attribute_index, 1);
-        assert_eq!(effect.scaling, vec![(1, 0.5)]);
+        let effects = named.resolve(&schema).unwrap();
+        assert_eq!(effects.len(), 1);
+        assert_eq!(effects[0].attribute_index, 1);
+        assert_eq!(effects[0].scaling, vec![(1, 0.5)]);
+    }
+
+    #[test]
+    fn resolve_effect_by_group() {
+        // Use a schema with multiple wealth attrs.
+        let multi_schema = AttributeSchema::from_json(
+            r#"{
+                "version": 1,
+                "attributes": [
+                    {"name": "wealth.cash", "unit": "$"},
+                    {"name": "wealth.stocks", "unit": "$"},
+                    {"name": "health.physical", "unit": "pts"}
+                ]
+            }"#,
+        )
+        .unwrap();
+
+        let named = NamedEffect::group_fixed("wealth", -500.0);
+        let effects = named.resolve(&multi_schema).unwrap();
+        assert_eq!(effects.len(), 2);
+        assert_eq!(effects[0].attribute_index, 0); // wealth.cash
+        assert_eq!(effects[0].delta, -500.0);
+        assert_eq!(effects[1].attribute_index, 1); // wealth.stocks
+        assert_eq!(effects[1].delta, -500.0);
+    }
+
+    #[test]
+    fn resolve_effect_group_not_found() {
+        let schema = test_schema();
+        let named = NamedEffect::group_fixed("nonexistent", 10.0);
+        assert!(named.resolve(&schema).is_err());
+    }
+
+    #[test]
+    fn resolve_effect_no_target_errors() {
+        let schema = test_schema();
+        let named = NamedEffect {
+            attribute: None,
+            group: None,
+            delta: 10.0,
+            scaling: vec![],
+        };
+        assert!(named.resolve(&schema).is_err());
     }
 
     #[test]
