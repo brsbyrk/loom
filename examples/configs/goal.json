@@ -1,17 +1,19 @@
 {
-  "weights": [1.0, 0.8, 0.5, -1.0, 0.7, -0.3, 0.4, 0.4, 0.4, 0.3, 0.3, 0.2],
-  "cliffs": [
-    null,
-    null,
-    null,
-    null,
-    {"min": 30.0, "penalty": 1.0},
-    null,
-    null,
-    null,
-    null,
-    null,
-    null,
-    null
-  ]
+  "weights": {
+    "wealth.cash": 1.0,
+    "wealth.stocks": 0.8,
+    "wealth.house_value": 0.5,
+    "wealth.debt": -1.0,
+    "health.physical": 0.7,
+    "health.stress": -0.3,
+    "skills.rust": 0.4,
+    "skills.python": 0.4,
+    "skills.negotiation": 0.4,
+    "social.bob": 0.3,
+    "social.alice": 0.3,
+    "time_free": 0.2
+  },
+  "cliffs": {
+    "health.physical": {"min": 30.0, "penalty": 1.0}
+  }
 }

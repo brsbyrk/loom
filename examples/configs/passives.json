@@ -2,31 +2,30 @@
   {
     "id": "salary",
     "label": "Monthly salary",
-    "frequency": "EveryStep",
+    "frequency": {"type": "everystep"},
     "effects": [
-      {"attribute_index": 0, "delta": 3333.33}
+      {"attribute": "wealth.cash", "delta": 3333.33}
     ]
   },
   {
     "id": "stress_decay",
     "label": "Natural stress recovery",
-    "frequency": "EveryStep",
+    "frequency": {"type": "everystep"},
     "effects": [
-      {"attribute_index": 5, "delta": -2}
+      {"attribute": "health.stress", "delta": -2}
     ]
   },
   {
     "id": "health_maintenance",
     "label": "Health maintenance check",
     "frequency": {
-      "When": {
-        "attribute_index": 5,
-        "operator": "Gt",
-        "value": 70
-      }
+      "type": "when",
+      "attribute": "health.stress",
+      "operator": "Gt",
+      "value": 70
     },
     "effects": [
-      {"attribute_index": 4, "delta": -0.5}
+      {"attribute": "health.physical", "delta": -0.5}
     ]
   }
 ]

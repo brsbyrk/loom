@@ -1,8 +1,7 @@
 //! Loom TUI — terminal-based decision explorer.
 //!
-//! Loads decision configurations and lets you browse, inspect, and simulate decisions
-//! interactively. Requires config files in `../../examples/configs/` relative to the
-//! crate directory (i.e., in the workspace `examples/configs/`).
+//! Loads decision configurations (using human-readable attribute names) and lets you
+//! browse, inspect, and simulate decisions interactively.
 //!
 //! # Controls
 //!
@@ -16,28 +15,30 @@ mod app;
 mod ui;
 
 use app::{App, Screen};
-use loom_core::{AttributeSchema, Decision, GoalVector, PassiveEffect};
+use loom_core::{AttributeSchema, NamedDecision, NamedGoalVector, NamedPassiveEffect};
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::DefaultTerminal;
 use std::sync::Arc;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ── Config loading ───────────────────────────────────────────────────────────
-    // CARGO_MANIFEST_DIR is crates/loom-tui/; configs are at workspace_root/examples/configs/
     let config_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/configs");
 
     let schema = Arc::new(AttributeSchema::from_path(&format!(
         "{config_dir}/attribute_schema.json"
     ))?);
-    let decision: Decision = serde_json::from_str(&std::fs::read_to_string(format!(
-        "{config_dir}/job_decision.json"
-    ))?)?;
+
+    let decision = NamedDecision::from_path(
+        &format!("{config_dir}/job_decision.json"),
+        &schema,
+    )?;
     let decisions = vec![decision];
-    let passives: Vec<PassiveEffect> = serde_json::from_str(&std::fs::read_to_string(format!(
-        "{config_dir}/passives.json"
-    ))?)?;
-    let goal: GoalVector =
-        serde_json::from_str(&std::fs::read_to_string(format!("{config_dir}/goal.json"))?)?;
+    let passives = NamedPassiveEffect::list_from_path(
+        &format!("{config_dir}/passives.json"),
+        &schema,
+    )?;
+    let goal =
+        NamedGoalVector::from_path(&format!("{config_dir}/goal.json"), &schema)?;
 
     // ── Initial state ────────────────────────────────────────────────────────────
     let mut initial_state = loom_core::DynamicState::new(schema.clone());
@@ -64,7 +65,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ..App::empty()
     };
 
-    // ── Terminal setup ───────────────────────────────────────────────────────────
+    // ── Terminal ─────────────────────────────────────────────────────────────────
     let mut terminal = ratatui::init();
     let result = run(&mut terminal, &mut app);
     ratatui::restore();

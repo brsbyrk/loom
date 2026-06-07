@@ -1,7 +1,7 @@
 //! Example: "Take remote job at Nvidia" — decision simulation.
 //!
 //! Loads all configuration from JSON files and runs a Monte Carlo simulation.
-//! Demonstrates the full data-driven pipeline: schema → state → decision → passives → goal → analysis.
+//! Uses human-readable attribute names (e.g., "health.stress") — no raw indices.
 //!
 //! Usage:
 //! ```bash
@@ -9,29 +9,32 @@
 //! ```
 
 use loom_core::{
-    AttributeSchema, Decision, DecisionAnalysis, DynamicState, GoalVector, PassiveEffect,
-    Simulation,
+    AttributeSchema, DecisionAnalysis, DynamicState, NamedDecision, NamedGoalVector,
+    NamedPassiveEffect, Simulation,
 };
 use std::sync::Arc;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // examples/configs/ is at workspace root; CARGO_MANIFEST_DIR is crates/loom-core
     let config_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/configs");
 
-    // ── Load configuration ───────────────────────────────────────────────────────
+    // ── Load schema ──────────────────────────────────────────────────────────────
     let schema = Arc::new(AttributeSchema::from_path(&format!(
         "{config_dir}/attribute_schema.json"
     ))?);
-    let decision: Decision =
-        serde_json::from_str(&std::fs::read_to_string(format!(
-            "{config_dir}/job_decision.json"
-        ))?)?;
-    let passives: Vec<PassiveEffect> =
-        serde_json::from_str(&std::fs::read_to_string(format!(
-            "{config_dir}/passives.json"
-        ))?)?;
-    let goal: GoalVector =
-        serde_json::from_str(&std::fs::read_to_string(format!("{config_dir}/goal.json"))?)?;
+
+    // ── Load named configs and resolve to engine types ───────────────────────────
+    let decision = NamedDecision::from_path(
+        &format!("{config_dir}/job_decision.json"),
+        &schema,
+    )?;
+    let passives = NamedPassiveEffect::list_from_path(
+        &format!("{config_dir}/passives.json"),
+        &schema,
+    )?;
+    let goal = NamedGoalVector::from_path(
+        &format!("{config_dir}/goal.json"),
+        &schema,
+    )?;
 
     // ── Initial state ────────────────────────────────────────────────────────────
     let mut state = DynamicState::new(schema.clone());
@@ -50,7 +53,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ── Simulation ───────────────────────────────────────────────────────────────
     let sim = Simulation {
-        horizon: 24,            // 24 months forward
+        horizon: 24,
         monte_carlo_runs: 1000,
         passives,
     };
@@ -63,7 +66,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn print_analysis(analysis: &DecisionAnalysis, decision: &Decision, schema: &AttributeSchema) {
+fn print_analysis(
+    analysis: &DecisionAnalysis,
+    decision: &loom_core::Decision,
+    schema: &AttributeSchema,
+) {
     println!();
     println!("══════════════════════════════════════════════════");
     println!("  LOOM SIMULATION: \"{}\"", decision.label);
@@ -75,10 +82,11 @@ fn print_analysis(analysis: &DecisionAnalysis, decision: &Decision, schema: &Att
         println!();
         println!("  Required:");
         for cond in &decision.preconditions {
-            let name = schema.at(cond.attribute_index).map_or(
-                format!("attr[{}]", cond.attribute_index),
-                |a| a.name.clone(),
-            );
+            let name = schema
+                .at(cond.attribute_index)
+                .map_or(format!("attr[{}]", cond.attribute_index), |a| {
+                    a.name.clone()
+                });
             println!("    - {name} {:?} {}", cond.operator, cond.value);
         }
         return;
@@ -129,7 +137,10 @@ fn print_analysis(analysis: &DecisionAnalysis, decision: &Decision, schema: &Att
     // Utility over time summary
     println!("  ── Utility over time (first 4 + last 2 steps) ───");
     println!();
-    println!("    {:<6} {:>10} {:>10} {:>10}", "Step", "Mean", "Min", "Max");
+    println!(
+        "    {:<6} {:>10} {:>10} {:>10}",
+        "Step", "Mean", "Min", "Max"
+    );
     println!("    {:-<36}", "");
     let bands = &analysis.utility_over_time;
     let show_steps: Vec<usize> = if bands.len() <= 6 {
