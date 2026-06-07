@@ -1,13 +1,12 @@
 [package]
-name = "loom-tui"
+name = "loom-store"
 version = "0.1.0"
 edition = "2024"
-description = "Loom terminal exploration interface — fzf-style decision browser"
+description = "Loom SQLite persistence — schemas, decisions, passives, goals, state snapshots"
 license = "MIT"
 
 [dependencies]
 loom-core = { path = "../loom-core" }
-loom-store = { path = "../loom-store" }
-ratatui = "0.30.1"
+rusqlite = { version = "0.31", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

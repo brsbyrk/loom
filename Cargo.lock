@@ -733,12 +733,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "loom-store"
+version = "0.1.0"
+dependencies = [
+ "loom-core",
+ "rusqlite",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "loom-tui"
 version = "0.1.0"
 dependencies = [
  "loom-core",
+ "loom-store",
  "ratatui",
- "rusqlite",
  "serde",
  "serde_json",
 ]

@@ -1,42 +1,48 @@
 //! Loom TUI — terminal-based decision explorer with state persistence.
 //!
-//! Loads decision configurations, lets you browse/inspect/simulate decisions,
-//! and save/load/branch state snapshots via SQLite.
-//!
-//! Database: ~/.loom/states.db
+//! Loads configuration from SQLite (~/.loom/loom.db), not from JSON files.
+//! Run `cargo run --example seed -p loom-store` first to populate the DB.
 
 mod app;
-mod store;
 mod ui;
 
 use app::{App, Screen};
-use loom_core::{AttributeSchema, DynamicState, NamedDecision, NamedGoalVector, NamedPassiveEffect};
+use loom_core::DynamicState;
+use loom_store::Store;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::DefaultTerminal;
 use std::sync::Arc;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // ── Config loading ───────────────────────────────────────────────────────────
-    let config_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/configs");
+    // ── Load from DB ────────────────────────────────────────────────────────────
+    let store = Store::open_default()?;
 
-    let schema = Arc::new(AttributeSchema::from_path(&format!(
-        "{config_dir}/attribute_schema.json"
-    ))?);
+    let schema = Arc::new(
+        store
+            .get_schema("personal")?
+            .ok_or("No schema 'personal' in DB — run seed first:\n  cargo run --example seed -p loom-store")?,
+    );
 
-    let decision = NamedDecision::from_path(
-        &format!("{config_dir}/job_decision.json"),
-        &schema,
-    )?;
-    let decisions = vec![decision];
-    let passives = NamedPassiveEffect::list_from_path(
-        &format!("{config_dir}/passives.json"),
-        &schema,
-    )?;
-    let goal =
-        NamedGoalVector::from_path(&format!("{config_dir}/goal.json"), &schema)?;
+    let named_decisions = store.list_decisions("personal")?;
+    let decisions: Vec<_> = named_decisions
+        .iter()
+        .map(|nd| nd.resolve(&schema))
+        .collect::<Result<_, _>>()
+        .map_err(|e| format!("failed to resolve decision: {e}"))?;
 
-    // ── State store (~/.loom/states.db) ──────────────────────────────────────────
-    let store = store::Store::open_default()?;
+    let named_passives = store.list_passives("personal")?;
+    let passives: Vec<_> = named_passives
+        .iter()
+        .map(|np| np.resolve(&schema))
+        .collect::<Result<_, _>>()
+        .map_err(|e| format!("failed to resolve passive: {e}"))?;
+
+    let named_goal = store
+        .get_goal("personal", "default")?
+        .ok_or("No goal 'default' in DB — run seed first")?;
+    let goal = named_goal
+        .resolve(&schema)
+        .map_err(|e| format!("failed to resolve goal: {e}"))?;
 
     // ── Initial state ────────────────────────────────────────────────────────────
     let mut current_state = DynamicState::new(schema.clone());
@@ -148,7 +154,7 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App) -> Result<(), Box<dyn std:
                             app.input_mode = true;
                             app.branching = true;
                             app.save_name.clear();
-                            app.save_note = format!("branch from {}", 
+                            app.save_note = format!("branch from {}",
                                 app.saved_states.get(app.state_idx)
                                     .map_or("?", |s| s.name.as_str()));
                         }

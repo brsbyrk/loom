@@ -1,10 +1,10 @@
 //! Application state for the Loom TUI.
 
-use crate::store::{SavedState, Store};
 use loom_core::{
     AttributeSchema, Decision, DecisionAnalysis, DynamicState, GoalVector, PassiveEffect,
     Simulation,
 };
+use loom_store::{SavedState, Store};
 use std::sync::Arc;
 
 /// Which screen the TUI is showing.
@@ -140,7 +140,7 @@ impl App {
 
     /// Open the state manager, refreshing the saved states list.
     pub fn open_state_manager(&mut self) {
-        self.saved_states = self.store.list().unwrap_or_default();
+        self.saved_states = self.store.list_states().unwrap_or_default();
         self.state_idx = if self.saved_states.is_empty() { 0 } else { 0 };
         self.prev_screen = self.screen.clone();
         self.screen = Screen::StateManager;
@@ -155,15 +155,20 @@ impl App {
         let ok = if self.branching {
             let from = self.saved_states.get(self.state_idx).map(|s| s.name.clone());
             match from {
-                Some(src) => self.store.branch(&src, &self.save_name, &self.save_note).unwrap_or(false),
+                Some(src) => self
+                    .store
+                    .branch_state(&src, &self.save_name, &self.save_note)
+                    .unwrap_or(false),
                 None => false,
             }
         } else {
             let values = self.current_state.as_slice().to_vec();
-            self.store.save(&self.save_name, &self.save_note, &values).is_ok()
+            self.store
+                .save_state(&self.save_name, &self.save_note, &values)
+                .is_ok()
         };
         if ok {
-            self.saved_states = self.store.list().unwrap_or_default();
+            self.saved_states = self.store.list_states().unwrap_or_default();
             self.save_name.clear();
             self.save_note.clear();
             self.input_mode = false;
@@ -188,8 +193,8 @@ impl App {
     pub fn delete_state(&mut self) -> bool {
         if let Some(saved) = self.saved_states.get(self.state_idx) {
             let name = saved.name.clone();
-            if self.store.delete(&name).is_ok() {
-                self.saved_states = self.store.list().unwrap_or_default();
+            if self.store.delete_state(&name).is_ok() {
+                self.saved_states = self.store.list_states().unwrap_or_default();
                 if self.state_idx >= self.saved_states.len() && !self.saved_states.is_empty() {
                     self.state_idx = self.saved_states.len() - 1;
                 }
