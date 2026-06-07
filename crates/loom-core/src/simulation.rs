@@ -17,6 +17,7 @@
 
 use crate::event::{Decision, Outcome};
 use crate::schema::DynamicState;
+use crate::scoring::GoalVector;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use std::collections::HashMap;
@@ -172,26 +173,20 @@ impl Simulation {
     /// 7. For each forward step (1..horizon):
     ///    a. Tick passive effects
     ///    b. Clamp state
-    ///    c. Record utility
+    ///    c. Record utility via `goal.utility(&state)`
     /// 8. Record final state
-    ///
-    /// # Utility function
-    ///
-    /// Uses a simple weighted dot product: `Σ(state[i] × goal_weights[i])`.
-    /// `goal_weights` must have the same length as the state vector.
-    /// Phase 3 adds `GoalVector` with cliffs and nonlinear utility.
     pub fn run(
         &self,
         initial_state: &DynamicState,
         decision: &Decision,
-        goal_weights: &[f64],
+        goal: &GoalVector,
     ) -> SimulationResult {
         let dim = initial_state.len();
         assert_eq!(
-            goal_weights.len(),
+            goal.dimension(),
             dim,
-            "goal_weights length {} must match state dimension {}",
-            goal_weights.len(),
+            "goal dimension {} must match state dimension {}",
+            goal.dimension(),
             dim
         );
 
@@ -235,7 +230,7 @@ impl Simulation {
             let mut run_utility = Vec::with_capacity(self.horizon + 1);
 
             // Record utility at step 0 (post-decision, pre-passives)
-            run_utility.push(self.utility(&state, goal_weights));
+            run_utility.push(goal.utility(&state));
 
             for step in 1..=self.horizon {
                 // Tick passive effects
@@ -249,7 +244,7 @@ impl Simulation {
                 self.clamp_state(&mut state, initial_state);
 
                 // Record utility
-                run_utility.push(self.utility(&state, goal_weights));
+                run_utility.push(goal.utility(&state));
             }
 
             final_states.push(state);
@@ -323,9 +318,18 @@ impl Simulation {
         }
     }
 
-    /// Simple weighted dot-product utility.
-    fn utility(&self, state: &[f64], weights: &[f64]) -> f64 {
-        state.iter().zip(weights).map(|(s, w)| s * w).sum()
+    /// Run simulation and return a fully analyzed result.
+    ///
+    /// Convenience method that calls [`Self::run`] and then computes
+    /// [`DecisionAnalysis`](crate::DecisionAnalysis) from the raw output.
+    pub fn run_and_analyze(
+        &self,
+        initial_state: &DynamicState,
+        decision: &Decision,
+        goal: &GoalVector,
+    ) -> crate::scoring::DecisionAnalysis {
+        let result = self.run(initial_state, decision, goal);
+        crate::scoring::DecisionAnalysis::from_result(&result)
     }
 }
 
@@ -376,9 +380,9 @@ mod tests {
         let initial = DynamicState::from_vec(vec![1000.0, 100.0, 0.0], schema);
         let decision = test_decision();
         let sim = Simulation::new(5, 10);
-        let weights = vec![1.0, 0.5, -0.3]; // wealth+, health+, stress-
+        let goal = GoalVector::linear(vec![1.0, 0.5, -0.3]); // wealth+, health+, stress-
 
-        let result = sim.run(&initial, &decision, &weights);
+        let result = sim.run(&initial, &decision, &goal);
 
         assert!(result.decision_available);
         assert_eq!(result.final_states.len(), 10);
@@ -407,9 +411,9 @@ mod tests {
             outcomes: vec![],
         };
         let sim = Simulation::new(5, 10);
-        let weights = vec![1.0, 0.5, -0.3];
+        let goal = GoalVector::linear(vec![1.0, 0.5, -0.3]);
 
-        let result = sim.run(&initial, &decision, &weights);
+        let result = sim.run(&initial, &decision, &goal);
         assert!(!result.decision_available);
         assert!(result.final_states.is_empty());
     }
@@ -437,9 +441,9 @@ mod tests {
             ],
         };
         let sim = Simulation::new(1, 1000);
-        let weights = vec![1.0, 0.0, 0.0];
+        let goal = GoalVector::linear(vec![1.0, 0.0, 0.0]);
 
-        let result = sim.run(&initial, &decision, &weights);
+        let result = sim.run(&initial, &decision, &goal);
 
         // The 10% outcome should appear roughly 10% of the time
         let count_rare = *result.outcome_counts.get(&1).unwrap_or(&0);
@@ -477,9 +481,9 @@ mod tests {
             ],
         };
         let sim = Simulation::new(1, 100);
-        let weights = vec![1.0, 0.0, 0.0];
+        let goal = GoalVector::linear(vec![1.0, 0.0, 0.0]);
 
-        let result = sim.run(&initial, &decision, &weights);
+        let result = sim.run(&initial, &decision, &goal);
 
         // Stress is 90, so the first outcome (condition: stress < 50) is excluded.
         // Only the second outcome (index 1) should ever be sampled.
@@ -503,9 +507,9 @@ mod tests {
             "Salary",
             vec![AttributeEffect::fixed(0, 50.0)],
         ));
-        let weights = vec![1.0, 0.0, 0.0];
+        let goal = GoalVector::linear(vec![1.0, 0.0, 0.0]);
 
-        let result = sim.run(&initial, &decision, &weights);
+        let result = sim.run(&initial, &decision, &goal);
 
         let final_state = &result.final_states[0];
         // Initial: 1000 + 100 (decision) + 50×3 (passives × 3 steps) = 1250
@@ -524,9 +528,9 @@ mod tests {
             2, // every 2 steps
             vec![AttributeEffect::fixed(0, 200.0)],
         ));
-        let weights = vec![1.0, 0.0, 0.0];
+        let goal = GoalVector::linear(vec![1.0, 0.0, 0.0]);
 
-        let result = sim.run(&initial, &decision, &weights);
+        let result = sim.run(&initial, &decision, &goal);
 
         let final_state = &result.final_states[0];
         // Decision: +100
@@ -552,9 +556,9 @@ mod tests {
             }],
         };
         let sim = Simulation::new(1, 1);
-        let weights = vec![0.0, 1.0, 0.0];
+        let goal = GoalVector::linear(vec![0.0, 1.0, 0.0]);
 
-        let result = sim.run(&initial, &decision, &weights);
+        let result = sim.run(&initial, &decision, &goal);
         assert!((result.final_states[0][1] - 100.0).abs() < f64::EPSILON);
     }
 
@@ -564,9 +568,9 @@ mod tests {
         let initial = DynamicState::from_vec(vec![1000.0, 100.0, 0.0], schema);
         let decision = test_decision();
         let sim = Simulation::new(24, 1);
-        let weights = vec![1.0, 0.5, -0.3];
+        let goal = GoalVector::linear(vec![1.0, 0.5, -0.3]);
 
-        let result = sim.run(&initial, &decision, &weights);
+        let result = sim.run(&initial, &decision, &goal);
 
         // Horizon 24: step 0 (post-decision) + 24 forward steps = 25 entries
         assert_eq!(result.utility_traces[0].len(), 25);

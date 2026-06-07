@@ -31,6 +31,8 @@
 pub mod state;
 pub mod event;
 pub mod schema;
+pub mod distribution;
+pub mod scoring;
 pub mod simulation;
 
 pub use state::StateVector;
@@ -38,4 +40,6 @@ pub use event::{
     AttributeEffect, ComparisonOp, Condition, Decision, Event, Outcome, ScriptSource, Transform,
 };
 pub use schema::{AttributeDef, AttributeSchema, DynamicState, SchemaError};
+pub use distribution::{Distribution, TimeBand};
+pub use scoring::{DecisionAnalysis, GoalVector, Threshold};
 pub use simulation::{Frequency, PassiveEffect, Simulation, SimulationResult};
