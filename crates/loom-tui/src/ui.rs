@@ -24,6 +24,7 @@ pub fn render(f: &mut Frame, app: &App) {
         Screen::List => render_list(f, app),
         Screen::Detail => render_detail(f, app),
         Screen::Results => render_results(f, app),
+        Screen::StateManager => render_state_manager(f, app),
         Screen::Error(msg) => render_error(f, msg),
     }
 }
@@ -144,7 +145,7 @@ fn render_detail(f: &mut Frame, app: &App) {
                 .schema
                 .at(cond.attribute_index)
                 .map_or(format!("attr[{}]", cond.attribute_index), |a| a.name.clone());
-            let status = if cond.check(&app.initial_state) {
+            let status = if cond.check(&app.current_state) {
                 Span::styled(" ✓", Style::default().fg(GOOD))
             } else {
                 Span::styled(" ✗", Style::default().fg(BAD))
@@ -339,7 +340,7 @@ fn render_results(f: &mut Frame, app: &App) {
 
         for (i, attr) in app.schema.attributes.iter().enumerate() {
             let dist = &analysis.attribute_outcomes[i];
-            let initial = app.initial_state.get(&attr.name).unwrap_or(0.0);
+            let initial = app.current_state.get(&attr.name).unwrap_or(0.0);
             // Only show attributes that changed by >0.5
             if (dist.mean - initial).abs() < 0.5
                 && (dist.p5 - dist.p95).abs() < 0.5
@@ -411,6 +412,145 @@ fn render_results(f: &mut Frame, app: &App) {
         Span::styled(" Q ", Style::default().fg(ACCENT).bold()),
         Span::raw("quit"),
     ]))
+    .style(Style::default().bg(HEADER_BG));
+    f.render_widget(footer, chunks[1]);
+}
+
+// ── State manager screen ─────────────────────────────────────────────────────────────
+
+fn render_state_manager(f: &mut Frame, app: &App) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0), Constraint::Length(1)])
+        .split(f.area());
+
+    let mut lines: Vec<Line> = Vec::new();
+
+    // Header
+    lines.push(Line::from(Span::styled(
+        " State Manager — saved states ",
+        Style::default().fg(ACCENT).bold(),
+    )));
+    lines.push(Line::raw(""));
+
+    // Current state summary
+    let active_attrs: Vec<String> = app
+        .schema
+        .attributes
+        .iter()
+        .filter_map(|a| {
+            let val = app.current_state.get(&a.name).unwrap_or(0.0);
+            if val != 0.0 {
+                Some(format!("{}= {:.0}", a.name, val))
+            } else {
+                None
+            }
+        })
+        .collect();
+    lines.push(Line::from(Span::styled(
+        format!(" Active state: {}", active_attrs.join(", ")),
+        Style::default().fg(DIM),
+    )));
+    lines.push(Line::raw(""));
+
+    // Saved states list
+    if app.saved_states.is_empty() {
+        lines.push(Line::from(Span::styled(
+            " No saved states. Press N to save current state.",
+            Style::default().fg(DIM),
+        )));
+    } else {
+        lines.push(Line::from(Span::styled(
+            format!(" {} saved states:", app.saved_states.len()),
+            Style::default().fg(DIM),
+        )));
+        for (i, state) in app.saved_states.iter().enumerate() {
+            let cursor = if i == app.state_idx { " > " } else { "   " };
+            let style = if i == app.state_idx {
+                Style::default().fg(ACCENT).bold()
+            } else {
+                Style::default().fg(Color::White)
+            };
+            let preview: String = state
+                .values
+                .iter()
+                .take(4)
+                .map(|v| format!("{:.0}", v))
+                .collect::<Vec<_>>()
+                .join(", ");
+            lines.push(Line::from(vec![
+                Span::styled(cursor, style),
+                Span::styled(
+                    format!("{:<20}", state.name),
+                    style,
+                ),
+                Span::styled(
+                    format!("[{}]", preview),
+                    Style::default().fg(DIM),
+                ),
+            ]));
+        }
+    }
+    lines.push(Line::raw(""));
+
+    // Input mode
+    if app.input_mode {
+        lines.push(Line::from(Span::styled(
+            " Saving new state...",
+            Style::default().fg(ACCENT),
+        )));
+        lines.push(Line::from(vec![
+            Span::raw(" Name: "),
+            Span::styled(
+                format!("{}▌", app.save_name),
+                Style::default().fg(Color::White).bold(),
+            ),
+        ]));
+        lines.push(Line::from(Span::styled(
+            " Enter to confirm, Esc to cancel",
+            Style::default().fg(DIM),
+        )));
+    }
+
+    let output = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .title(Line::from(format!(" State Manager ")))
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(ACCENT)),
+        )
+        .wrap(Wrap { trim: false });
+
+    f.render_widget(output, chunks[0]);
+
+    // Footer
+    let footer = if app.input_mode {
+        Paragraph::new(Line::from(vec![
+            Span::styled(" Esc ", Style::default().fg(ACCENT).bold()),
+            Span::raw("cancel  "),
+            Span::styled(" Enter ", Style::default().fg(ACCENT).bold()),
+            Span::raw("save  "),
+            Span::styled(" Q ", Style::default().fg(ACCENT).bold()),
+            Span::raw("quit"),
+        ]))
+    } else {
+        Paragraph::new(Line::from(vec![
+            Span::styled(" ↑↓ ", Style::default().fg(ACCENT).bold()),
+            Span::raw("select  "),
+            Span::styled(" Enter ", Style::default().fg(ACCENT).bold()),
+            Span::raw("load  "),
+            Span::styled(" N ", Style::default().fg(ACCENT).bold()),
+            Span::raw("save  "),
+            Span::styled(" B ", Style::default().fg(ACCENT).bold()),
+            Span::raw("branch  "),
+            Span::styled(" D ", Style::default().fg(ACCENT).bold()),
+            Span::raw("delete  "),
+            Span::styled(" Esc ", Style::default().fg(ACCENT).bold()),
+            Span::raw("back  "),
+            Span::styled(" Q ", Style::default().fg(ACCENT).bold()),
+            Span::raw("quit"),
+        ]))
+    }
     .style(Style::default().bg(HEADER_BG));
     f.render_widget(footer, chunks[1]);
 }
