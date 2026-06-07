@@ -9,3 +9,7 @@ license = "MIT"
 rand = "0.8"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+[[example]]
+name = "job_decision"
+path = "../../examples/job_decision.rs"

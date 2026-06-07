@@ -1,0 +1,17 @@
+{
+  "weights": [1.0, 0.8, 0.5, -1.0, 0.7, -0.3, 0.4, 0.4, 0.4, 0.3, 0.3, 0.2],
+  "cliffs": [
+    null,
+    null,
+    null,
+    null,
+    {"min": 30.0, "penalty": 1.0},
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+  ]
+}

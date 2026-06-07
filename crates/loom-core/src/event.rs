@@ -237,6 +237,9 @@ impl Transform {
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Outcome {
+    /// Human-readable label for display purposes (e.g., "Great culture fit").
+    #[serde(default)]
+    pub label: String,
     /// Relative weight for probabilistic sampling.
     pub weight: f64,
     /// Optional guard — this outcome is only valid when the condition holds.
@@ -412,11 +415,13 @@ mod tests {
             cost: vec![],
             outcomes: vec![
                 Outcome {
+                    label: "".into(),
                     weight: 1.0,
                     condition: Some(Condition { attribute_index: 0, operator: ComparisonOp::Gt, value: 50.0 }),
                     transform: Transform::simple(vec![]),
                 },
                 Outcome {
+                    label: "".into(),
                     weight: 1.0,
                     condition: None,
                     transform: Transform::simple(vec![]),

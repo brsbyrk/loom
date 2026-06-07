@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "attributes": [
+    {"name": "wealth.cash",        "unit": "$",   "description": "Liquid cash"},
+    {"name": "wealth.stocks",      "unit": "$",   "description": "Stock portfolio value"},
+    {"name": "wealth.house_value", "unit": "$",   "description": "Current home value"},
+    {"name": "wealth.debt",        "unit": "$",   "description": "Total outstanding debt"},
+    {"name": "health.physical",    "unit": "pts", "bounds": [0, 100], "description": "Physical health score"},
+    {"name": "health.stress",      "unit": "pts", "bounds": [0, 100], "description": "Stress level (lower is better)"},
+    {"name": "skills.rust",        "unit": "pts", "bounds": [0, 100], "description": "Rust programming skill"},
+    {"name": "skills.python",      "unit": "pts", "bounds": [0, 100], "description": "Python programming skill"},
+    {"name": "skills.negotiation", "unit": "pts", "bounds": [0, 100], "description": "Negotiation skill"},
+    {"name": "social.bob",         "unit": "pts", "bounds": [0, 100], "description": "Relationship with Bob"},
+    {"name": "social.alice",       "unit": "pts", "bounds": [0, 100], "description": "Relationship with Alice"},
+    {"name": "time_free",          "unit": "hrs", "description": "Free time per week"}
+  ]
+}

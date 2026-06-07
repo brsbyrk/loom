@@ -1,0 +1,45 @@
+{
+  "id": "take_remote_job",
+  "label": "Take remote job at Nvidia",
+  "preconditions": [
+    {"attribute_index": 0, "operator": "Gt", "value": 15000},
+    {"attribute_index": 6, "operator": "Gte", "value": 60}
+  ],
+  "cost": [
+    {"attribute_index": 0, "delta": -5000}
+  ],
+  "outcomes": [
+    {
+      "weight": 70,
+      "label": "Great culture fit",
+      "condition": null,
+      "transform": {
+        "Declarative": {
+          "effects": [
+            {"attribute_index": 0, "delta": 40000},
+            {"attribute_index": 6, "delta": 20},
+            {"attribute_index": 5, "delta": 15}
+          ],
+          "conditional": [],
+          "default_conditional": []
+        }
+      }
+    },
+    {
+      "weight": 30,
+      "label": "Toxic environment",
+      "condition": null,
+      "transform": {
+        "Declarative": {
+          "effects": [
+            {"attribute_index": 0, "delta": 40000},
+            {"attribute_index": 5, "delta": 25},
+            {"attribute_index": 4, "delta": -10}
+          ],
+          "conditional": [],
+          "default_conditional": []
+        }
+      }
+    }
+  ]
+}

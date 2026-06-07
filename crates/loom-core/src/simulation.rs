@@ -20,12 +20,13 @@ use crate::schema::DynamicState;
 use crate::scoring::GoalVector;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 // ── Passive effects ──────────────────────────────────────────────────────────────────
 
 /// How often a passive effect ticks.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Frequency {
     /// Every step.
     EveryStep,
@@ -41,7 +42,7 @@ pub enum Frequency {
 /// - "income: wealth.cash += 5000 every step" (monthly salary on a monthly step)
 /// - "stress_decay: health.stress -= 2 every step"
 /// - "burnout_check: if health.stress > 80, health.physical -= 5 every step"
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PassiveEffect {
     /// Unique identifier.
     pub id: String,
@@ -366,6 +367,7 @@ mod tests {
             cost: vec![],
             outcomes: vec![
                 Outcome {
+                    label: "".into(),
                     weight: 1.0,
                     condition: None,
                     transform: Transform::simple(vec![AttributeEffect::fixed(0, 100.0)]),
@@ -429,11 +431,13 @@ mod tests {
             cost: vec![],
             outcomes: vec![
                 Outcome {
+                    label: "".into(),
                     weight: 90.0,
                     condition: None,
                     transform: Transform::simple(vec![AttributeEffect::fixed(0, 1.0)]),
                 },
                 Outcome {
+                    label: "".into(),
                     weight: 10.0,
                     condition: None,
                     transform: Transform::simple(vec![AttributeEffect::fixed(0, 1000.0)]),
@@ -465,6 +469,7 @@ mod tests {
             cost: vec![],
             outcomes: vec![
                 Outcome {
+                    label: "".into(),
                     weight: 1.0,
                     condition: Some(Condition {
                         attribute_index: 2,
@@ -474,6 +479,7 @@ mod tests {
                     transform: Transform::simple(vec![AttributeEffect::fixed(0, 1000.0)]),
                 },
                 Outcome {
+                    label: "".into(),
                     weight: 1.0,
                     condition: None,
                     transform: Transform::simple(vec![AttributeEffect::fixed(0, -500.0)]),
@@ -550,6 +556,7 @@ mod tests {
             preconditions: vec![],
             cost: vec![],
             outcomes: vec![Outcome {
+                label: "".into(),
                 weight: 1.0,
                 condition: None,
                 transform: Transform::simple(vec![AttributeEffect::fixed(1, 20.0)]),
