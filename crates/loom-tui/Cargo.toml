@@ -1,0 +1,13 @@
+[package]
+name = "loom-tui"
+version = "0.1.0"
+edition = "2024"
+description = "Loom terminal exploration interface — fzf-style decision browser"
+license = "MIT"
+
+[dependencies]
+loom-core = { path = "../loom-core" }
+ratatui = "0.29"
+crossterm = "0.28"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
