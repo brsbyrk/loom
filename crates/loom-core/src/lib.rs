@@ -30,8 +30,12 @@
 
 pub mod state;
 pub mod event;
+pub mod schema;
+pub mod simulation;
 
 pub use state::StateVector;
 pub use event::{
     AttributeEffect, ComparisonOp, Condition, Decision, Event, Outcome, ScriptSource, Transform,
 };
+pub use schema::{AttributeDef, AttributeSchema, DynamicState, SchemaError};
+pub use simulation::{Frequency, PassiveEffect, Simulation, SimulationResult};
