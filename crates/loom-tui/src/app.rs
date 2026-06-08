@@ -1,15 +1,19 @@
 //! Application state for the Loom TUI.
 
 use loom_core::{
-    AttributeSchema, Decision, DecisionAnalysis, DynamicState, GoalVector, PassiveEffect,
+    AttributeSchema, Decision, DecisionAnalysis, DynamicState, GoalVector, NamedCondition,
+    NamedDecision, NamedEffect, NamedGoalVector, NamedOutcome, NamedPassiveEffect, PassiveEffect,
     Simulation,
 };
-use loom_store::{SavedState, Store};
+use loom_store::{SchemaSummary, Store};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Which screen the TUI is showing.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Screen {
+    /// Schema (template) selection at startup.
+    SchemaList,
     /// Decision list browser.
     List,
     /// Detail view of a single decision.
@@ -20,12 +24,88 @@ pub enum Screen {
     Results,
     /// Error screen.
     Error(String),
+    /// Edit decisions list.
+    EditDecisions,
+    /// Edit a single decision's fields.
+    EditDecisionDetail,
+    /// Edit passives list.
+    EditPassives,
+    /// Edit a single passive.
+    EditPassiveDetail,
+    /// Edit goals list.
+    EditGoals,
+    /// Edit a single goal's weights/cliffs.
+    EditGoalDetail,
 }
 
 /// Scroll state for scrollable content.
 #[derive(Debug, Clone, Default)]
 pub struct ScrollState {
     pub offset: usize,
+}
+
+/// Sub-mode within an edit detail screen.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum EditField {
+    /// Editing the label.
+    Label,
+    /// Editing preconditions (decision only).
+    Preconditions,
+    /// Editing cost effects.
+    CostEffects,
+    /// Editing outcomes (decision only).
+    Outcomes,
+    /// Editing frequency (passive only).
+    Frequency,
+    /// Editing passive effects.
+    Effects,
+    /// Editing weights (goal only).
+    Weights,
+    /// Editing cliffs (goal only).
+    Cliffs,
+}
+
+/// State for the inline decision editor.
+#[derive(Debug, Clone)]
+pub struct DecisionEditState {
+    pub idx: usize,
+    pub label: String,
+    pub preconditions: Vec<NamedCondition>,
+    pub cost: Vec<NamedEffect>,
+    pub outcomes: Vec<NamedOutcome>,
+    pub text_buffer: String,
+    pub active_field: EditField,
+    /// When editing a list (preconditions, cost, outcomes), which item is selected.
+    pub list_idx: usize,
+    /// Sub-list index for editing outcome effects.
+    pub sub_list_idx: usize,
+    /// Are we editing a sub-item's field?
+    pub in_sub_edit: bool,
+    /// Buffer field identifier for sub-items: "attr", "op", "val", "weight", "label"
+    pub sub_field: String,
+}
+
+/// State for the inline passive editor.
+#[derive(Debug, Clone)]
+pub struct PassiveEditState {
+    pub idx: usize,
+    pub label: String,
+    pub passive_id: String,
+    pub effects: Vec<NamedEffect>,
+    pub text_buffer: String,
+    pub list_idx: usize,
+}
+
+/// State for the inline goal editor.
+#[derive(Debug, Clone)]
+pub struct GoalEditState {
+    pub idx: usize,
+    pub goal_name: String,
+    pub weights: Vec<(String, f64)>,
+    pub cliffs: Vec<(String, loom_core::Threshold)>,
+    pub text_buffer: String,
+    pub list_idx: usize,
+    pub show_weights: bool, // true=editing weights, false=editing cliffs
 }
 
 /// The full application state.
@@ -35,14 +115,27 @@ pub struct App {
 
     /// Loaded attribute schema.
     pub schema: Arc<AttributeSchema>,
+    /// Current schema name.
+    pub schema_name: String,
     /// All loaded decisions.
     pub decisions: Vec<Decision>,
+    /// Named decisions (for editing/re-saving).
+    pub named_decisions: Vec<NamedDecision>,
     /// All loaded passive effects.
     pub passives: Vec<PassiveEffect>,
+    /// Named passive effects (for editing).
+    pub named_passives: Vec<NamedPassiveEffect>,
     /// Loaded goal vector.
     pub goal: GoalVector,
+    /// Named goal vector (for editing).
+    pub named_goal: NamedGoalVector,
     /// Current state (mutable via state manager load/save).
     pub current_state: DynamicState,
+
+    /// Available schema list.
+    pub schema_list: Vec<SchemaSummary>,
+    /// Selected schema index.
+    pub schema_idx: usize,
 
     /// Current screen.
     pub screen: Screen,
@@ -56,7 +149,7 @@ pub struct App {
     pub scroll: ScrollState,
 
     /// List of saved states (refreshed on state manager entry).
-    pub saved_states: Vec<SavedState>,
+    pub saved_states: Vec<loom_store::SavedState>,
     /// Name input buffer for saving a new state.
     pub save_name: String,
     /// Note input buffer.
@@ -65,6 +158,8 @@ pub struct App {
     pub input_mode: bool,
     /// Is the current input a branch operation?
     pub branching: bool,
+    /// Confirmation prompt: show "Delete X? (y/n)"
+    pub confirm_delete: Option<String>,
 
     /// Simulation configuration.
     pub sim_config: SimConfig,
@@ -72,6 +167,19 @@ pub struct App {
     pub last_result: Option<DecisionAnalysis>,
     /// The decision that was simulated.
     pub last_decision: Option<Decision>,
+
+    // ── Edit state ───────────────────────────────────────────────────────────────
+    pub edit_decisions: Vec<NamedDecision>,
+    pub edit_decision_idx: usize,
+    pub edit_decision_detail: Option<DecisionEditState>,
+
+    pub edit_passives: Vec<NamedPassiveEffect>,
+    pub edit_passive_idx: usize,
+    pub edit_passive_detail: Option<PassiveEditState>,
+
+    pub edit_goals: Vec<(String, NamedGoalVector)>,
+    pub edit_goal_idx: usize,
+    pub edit_goal_detail: Option<GoalEditState>,
 }
 
 /// Simulation parameters.
@@ -91,24 +199,27 @@ impl Default for SimConfig {
 }
 
 impl App {
-    /// Create an app with a store, schema, and initial state.
-    pub fn new(
-        store: Store,
-        schema: Arc<AttributeSchema>,
-        decisions: Vec<Decision>,
-        passives: Vec<PassiveEffect>,
-        goal: GoalVector,
-        current_state: DynamicState,
-    ) -> Self {
+    /// Create an app with a store and initial state for schema browser.
+    pub fn new_browsing(store: Store, schema_list: Vec<SchemaSummary>) -> Self {
+        let empty_schema = Arc::new(AttributeSchema {
+            version: 1,
+            attributes: vec![],
+        });
         Self {
             store,
-            schema,
-            decisions,
-            passives,
-            goal,
-            current_state,
-            screen: Screen::List,
-            prev_screen: Screen::List,
+            schema: empty_schema.clone(),
+            schema_name: String::new(),
+            decisions: Vec::new(),
+            named_decisions: Vec::new(),
+            passives: Vec::new(),
+            named_passives: Vec::new(),
+            goal: GoalVector { weights: vec![], cliffs: vec![] },
+            named_goal: NamedGoalVector { weights: HashMap::new(), cliffs: HashMap::new() },
+            current_state: DynamicState::from_vec(vec![], empty_schema.clone()),
+            schema_list,
+            schema_idx: 0,
+            screen: Screen::SchemaList,
+            prev_screen: Screen::SchemaList,
             selected_idx: 0,
             state_idx: 0,
             scroll: ScrollState::default(),
@@ -117,14 +228,122 @@ impl App {
             save_note: String::new(),
             input_mode: false,
             branching: false,
+            confirm_delete: None,
             sim_config: SimConfig::default(),
             last_result: None,
             last_decision: None,
+            edit_decisions: Vec::new(),
+            edit_decision_idx: 0,
+            edit_decision_detail: None,
+            edit_passives: Vec::new(),
+            edit_passive_idx: 0,
+            edit_passive_detail: None,
+            edit_goals: Vec::new(),
+            edit_goal_idx: 0,
+            edit_goal_detail: None,
+        }
+    }
+
+    /// Load all data for a selected schema.
+    pub fn load_schema(&mut self, schema_name: &str) -> Result<(), String> {
+        let schema = Arc::new(
+            self.store
+                .get_schema(schema_name)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("Schema '{}' not found", schema_name))?,
+        );
+        self.schema = schema.clone();
+        self.schema_name = schema_name.to_string();
+
+        let named_decisions = self
+            .store
+            .list_decisions(schema_name)
+            .map_err(|e| e.to_string())?;
+        self.named_decisions = named_decisions.clone();
+        self.decisions = named_decisions
+            .iter()
+            .map(|nd| nd.resolve(&schema))
+            .collect::<Result<_, _>>()
+            .map_err(|e| format!("failed to resolve decision: {e}"))?;
+
+        let named_passives = self.store.list_passives(schema_name).map_err(|e| e.to_string())?;
+        self.named_passives = named_passives.clone();
+        self.passives = named_passives
+            .iter()
+            .map(|np| np.resolve(&schema))
+            .collect::<Result<_, _>>()
+            .map_err(|e| format!("failed to resolve passive: {e}"))?;
+
+        let named_goal = self
+            .store
+            .get_goal(schema_name, "default")
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("No goal 'default' in schema '{}'", schema_name))?;
+        self.named_goal = named_goal.clone();
+        self.goal = named_goal
+            .resolve(&schema)
+            .map_err(|e| format!("failed to resolve goal: {e}"))?;
+
+        Ok(())
+    }
+
+    /// Set default initial state values for the current schema.
+    pub fn init_default_state(&mut self) {
+        let mut state = DynamicState::new(self.schema.clone());
+        for attr in &self.schema.attributes {
+            // Set reasonable defaults: midpoint of bounds or a default value
+            if let Some(b) = &attr.bounds {
+                let mid = (b.0 + b.1) / 2.0;
+                state.set(&attr.name, mid);
+            } else {
+                state.set(&attr.name, 50000.0);
+            }
+        }
+        // Override specific defaults for financial
+        if self.schema_name == "financial" {
+            state.set("cash", 25000.0);
+            state.set("stocks", 10000.0);
+            state.set("bonds", 5000.0);
+            state.set("debt", 15000.0);
+            state.set("monthly_income", 5000.0);
+            state.set("monthly_expenses", 3500.0);
+            state.set("credit_score", 700.0);
+            state.set("risk_tolerance", 50.0);
+            state.set("retirement_savings", 15000.0);
+        }
+        if self.schema_name == "personal" {
+            state.set("wealth.cash", 50000.0);
+            state.set("wealth.stocks", 25000.0);
+            state.set("wealth.house_value", 200000.0);
+            state.set("wealth.debt", 50000.0);
+            state.set("health.physical", 75.0);
+            state.set("health.stress", 30.0);
+            state.set("skills.rust", 70.0);
+            state.set("skills.python", 45.0);
+            state.set("skills.negotiation", 55.0);
+            state.set("social.bob", 60.0);
+            state.set("social.alice", 85.0);
+            state.set("time_free", 40.0);
+        }
+        self.current_state = state;
+    }
+
+    /// Reload decisions/passives/goals for current schema from store.
+    pub fn reload_data(&mut self) {
+        let name = self.schema_name.clone();
+        if name.is_empty() {
+            return;
+        }
+        if let Err(e) = self.load_schema(&name) {
+            self.screen = Screen::Error(e);
         }
     }
 
     /// Run a simulation on the currently selected decision.
     pub fn run_simulation(&mut self) {
+        if self.decisions.is_empty() || self.selected_idx >= self.decisions.len() {
+            return;
+        }
         let decision = &self.decisions[self.selected_idx];
         let sim = Simulation {
             horizon: self.sim_config.horizon,
@@ -141,7 +360,7 @@ impl App {
     /// Open the state manager, refreshing the saved states list.
     pub fn open_state_manager(&mut self) {
         self.saved_states = self.store.list_states().unwrap_or_default();
-        self.state_idx = if self.saved_states.is_empty() { 0 } else { 0 };
+        self.state_idx = 0;
         self.prev_screen = self.screen.clone();
         self.screen = Screen::StateManager;
         self.input_mode = false;
@@ -258,5 +477,244 @@ impl App {
         if self.input_mode {
             self.save_name.pop();
         }
+    }
+
+    // ── Edit navigation ──────────────────────────────────────────────────────────
+
+    pub fn open_edit_decisions(&mut self) {
+        self.edit_decisions = self.named_decisions.clone();
+        self.edit_decision_idx = 0;
+        self.prev_screen = self.screen.clone();
+        self.screen = Screen::EditDecisions;
+    }
+
+    pub fn open_edit_passives(&mut self) {
+        self.edit_passives = self.named_passives.clone();
+        self.edit_passive_idx = 0;
+        self.prev_screen = self.screen.clone();
+        self.screen = Screen::EditPassives;
+    }
+
+    pub fn open_edit_goals(&mut self) {
+        let goals = match self.store.list_goals(&self.schema_name) {
+            Ok(names) => names,
+            Err(_) => vec!["default".to_string()],
+        };
+        self.edit_goals = goals
+            .iter()
+            .map(|n| {
+                let g = self.store.get_goal(&self.schema_name, n).ok().flatten();
+                (n.clone(), g.unwrap_or_else(|| self.named_goal.clone()))
+            })
+            .collect();
+        self.edit_goal_idx = 0;
+        self.prev_screen = self.screen.clone();
+        self.screen = Screen::EditGoals;
+    }
+
+    pub fn edit_decision_prev(&mut self) {
+        if !self.edit_decisions.is_empty() {
+            self.edit_decision_idx = self
+                .edit_decision_idx
+                .checked_sub(1)
+                .unwrap_or(self.edit_decisions.len() - 1);
+        }
+    }
+
+    pub fn edit_decision_next(&mut self) {
+        if !self.edit_decisions.is_empty() {
+            self.edit_decision_idx =
+                (self.edit_decision_idx + 1) % self.edit_decisions.len();
+        }
+    }
+
+    pub fn edit_passive_prev(&mut self) {
+        if !self.edit_passives.is_empty() {
+            self.edit_passive_idx = self
+                .edit_passive_idx
+                .checked_sub(1)
+                .unwrap_or(self.edit_passives.len() - 1);
+        }
+    }
+
+    pub fn edit_passive_next(&mut self) {
+        if !self.edit_passives.is_empty() {
+            self.edit_passive_idx =
+                (self.edit_passive_idx + 1) % self.edit_passives.len();
+        }
+    }
+
+    pub fn edit_goal_prev(&mut self) {
+        if !self.edit_goals.is_empty() {
+            self.edit_goal_idx = self
+                .edit_goal_idx
+                .checked_sub(1)
+                .unwrap_or(self.edit_goals.len() - 1);
+        }
+    }
+
+    pub fn edit_goal_next(&mut self) {
+        if !self.edit_goals.is_empty() {
+            self.edit_goal_idx = (self.edit_goal_idx + 1) % self.edit_goals.len();
+        }
+    }
+
+    /// Open a decision for inline editing.
+    pub fn open_decision_detail(&mut self, idx: usize) {
+        if let Some(d) = self.edit_decisions.get(idx) {
+            self.edit_decision_detail = Some(DecisionEditState {
+                idx,
+                label: d.label.clone(),
+                preconditions: d.preconditions.clone(),
+                cost: d.cost.clone(),
+                outcomes: d.outcomes.clone(),
+                text_buffer: String::new(),
+                active_field: EditField::Label,
+                list_idx: 0,
+                sub_list_idx: 0,
+                in_sub_edit: false,
+                sub_field: String::new(),
+            });
+            self.screen = Screen::EditDecisionDetail;
+        }
+    }
+
+    /// Open a passive for inline editing.
+    pub fn open_passive_detail(&mut self, idx: usize) {
+        if let Some(p) = self.edit_passives.get(idx) {
+            self.edit_passive_detail = Some(PassiveEditState {
+                idx,
+                label: p.label.clone(),
+                passive_id: p.id.clone(),
+                effects: p.effects.clone(),
+                text_buffer: String::new(),
+                list_idx: 0,
+            });
+            self.screen = Screen::EditPassiveDetail;
+        }
+    }
+
+    /// Open a goal for inline editing.
+    pub fn open_goal_detail(&mut self, idx: usize) {
+        if let Some((name, g)) = self.edit_goals.get(idx) {
+            let mut weights: Vec<(String, f64)> = g.weights.clone().into_iter().collect();
+            weights.sort_by(|a, b| a.0.cmp(&b.0));
+            let mut cliffs: Vec<(String, loom_core::Threshold)> =
+                g.cliffs.clone().into_iter().collect();
+            cliffs.sort_by(|a, b| a.0.cmp(&b.0));
+            self.edit_goal_detail = Some(GoalEditState {
+                idx,
+                goal_name: name.clone(),
+                weights,
+                cliffs,
+                text_buffer: String::new(),
+                list_idx: 0,
+                show_weights: true,
+            });
+            self.screen = Screen::EditGoalDetail;
+        }
+    }
+
+    /// Save edits to a decision to the store and reload.
+    pub fn save_decision_edit(&mut self) {
+        if let Some(state) = self.edit_decision_detail.take() {
+            let nd = NamedDecision {
+                id: self.edit_decisions[state.idx].id.clone(),
+                label: state.label,
+                preconditions: state.preconditions,
+                cost: state.cost,
+                outcomes: state.outcomes,
+            };
+            let _ = self.store.upsert_decision(&self.schema_name, &nd);
+            self.edit_decisions[state.idx] = nd;
+            self.reload_data();
+        }
+        self.screen = Screen::EditDecisions;
+    }
+
+    /// Save edits to a passive to the store and reload.
+    pub fn save_passive_edit(&mut self) {
+        if let Some(state) = self.edit_passive_detail.take() {
+            // Find original passive to preserve frequency
+            let freq = self
+                .named_passives
+                .iter()
+                .find(|p| p.id == state.passive_id)
+                .map(|p| p.frequency.clone())
+                .unwrap_or(loom_core::NamedFrequency::EveryStep);
+
+            let np = NamedPassiveEffect {
+                id: state.passive_id,
+                label: state.label,
+                frequency: freq,
+                effects: state.effects,
+            };
+            let _ = self.store.upsert_passive(&self.schema_name, &np);
+            self.reload_data();
+        }
+        self.screen = Screen::EditPassives;
+    }
+
+    /// Save edits to a goal to the store and reload.
+    pub fn save_goal_edit(&mut self) {
+        if let Some(state) = self.edit_goal_detail.take() {
+            let mut weights = HashMap::new();
+            for (name, w) in &state.weights {
+                weights.insert(name.clone(), *w);
+            }
+            let mut cliffs = HashMap::new();
+            for (name, t) in &state.cliffs {
+                cliffs.insert(name.clone(), t.clone());
+            }
+            let ng = NamedGoalVector { weights, cliffs };
+            let _ = self.store.upsert_goal(&self.schema_name, &state.goal_name, &ng);
+            self.reload_data();
+        }
+        self.screen = Screen::EditGoals;
+    }
+
+    /// Delete a decision from the store.
+    pub fn delete_edit_decision(&mut self, idx: usize) -> bool {
+        if let Some(d) = self.edit_decisions.get(idx) {
+            if self.store.delete_decision(&self.schema_name, &d.id).is_ok() {
+                self.edit_decisions.remove(idx);
+                if self.edit_decision_idx >= self.edit_decisions.len() && !self.edit_decisions.is_empty() {
+                    self.edit_decision_idx = self.edit_decisions.len() - 1;
+                }
+                self.reload_data();
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Delete a passive from the store.
+    pub fn delete_edit_passive(&mut self, idx: usize) -> bool {
+        if let Some(p) = self.edit_passives.get(idx) {
+            if self.store.delete_passive(&self.schema_name, &p.id).is_ok() {
+                self.edit_passives.remove(idx);
+                if self.edit_passive_idx >= self.edit_passives.len() && !self.edit_passives.is_empty() {
+                    self.edit_passive_idx = self.edit_passives.len() - 1;
+                }
+                self.reload_data();
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Delete a goal from the store.
+    pub fn delete_edit_goal(&mut self, idx: usize) -> bool {
+        if let Some((name, _)) = self.edit_goals.get(idx) {
+            if self.store.delete_goal(&self.schema_name, name).is_ok() {
+                self.edit_goals.remove(idx);
+                if self.edit_goal_idx >= self.edit_goals.len() && !self.edit_goals.is_empty() {
+                    self.edit_goal_idx = self.edit_goals.len() - 1;
+                }
+                self.reload_data();
+                return true;
+            }
+        }
+        false
     }
 }

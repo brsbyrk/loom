@@ -1,6 +1,7 @@
 //! Rendering functions for the Loom TUI.
 
-use crate::app::{App, Screen};
+use crate::app::{EditField, Screen};
+use crate::app::App;
 use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
@@ -16,17 +17,103 @@ const ACCENT: Color = Color::Rgb(100, 200, 255);
 const GOOD: Color = Color::Rgb(80, 220, 120);
 const BAD: Color = Color::Rgb(255, 80, 80);
 const DIM: Color = Color::Rgb(120, 120, 140);
+const YELLOW: Color = Color::Rgb(255, 220, 80);
 
 // ── Entry point ──────────────────────────────────────────────────────────────────────
 
 pub fn render(f: &mut Frame, app: &App) {
     match &app.screen {
+        Screen::SchemaList => render_schema_list(f, app),
         Screen::List => render_list(f, app),
         Screen::Detail => render_detail(f, app),
         Screen::Results => render_results(f, app),
         Screen::StateManager => render_state_manager(f, app),
         Screen::Error(msg) => render_error(f, msg),
+        Screen::EditDecisions => render_edit_decisions(f, app),
+        Screen::EditDecisionDetail => render_edit_decision_detail(f, app),
+        Screen::EditPassives => render_edit_passives(f, app),
+        Screen::EditPassiveDetail => render_edit_passive_detail(f, app),
+        Screen::EditGoals => render_edit_goals(f, app),
+        Screen::EditGoalDetail => render_edit_goal_detail(f, app),
     }
+}
+
+// ── Schema list screen ───────────────────────────────────────────────────────────────
+
+fn render_schema_list(f: &mut Frame, app: &App) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0), Constraint::Length(1)])
+        .split(f.area());
+
+    let mut lines: Vec<Line> = Vec::new();
+    lines.push(Line::from(Span::styled(
+        " Select a schema (template):",
+        Style::default().fg(ACCENT).bold(),
+    )));
+    lines.push(Line::raw(""));
+
+    if app.schema_list.is_empty() {
+        lines.push(Line::from(Span::styled(
+            " No schemas found.",
+            Style::default().fg(BAD),
+        )));
+        lines.push(Line::from(Span::styled(
+            " Run `cargo run --example seed -p loom-store` or press N to create one.",
+            Style::default().fg(DIM),
+        )));
+    } else {
+        for (i, s) in app.schema_list.iter().enumerate() {
+            let cursor = if i == app.schema_idx { " > " } else { "   " };
+            let style = if i == app.schema_idx {
+                Style::default().fg(ACCENT).bold()
+            } else {
+                Style::default().fg(Color::White)
+            };
+            lines.push(Line::from(vec![
+                Span::styled(cursor, style),
+                Span::styled(
+                    format!("{:<20}", s.name),
+                    style,
+                ),
+                Span::styled(
+                    format!("({} attributes)", s.attribute_count),
+                    Style::default().fg(DIM),
+                ),
+            ]));
+        }
+    }
+
+    let block = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .title(" Loom ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(ACCENT)),
+        )
+        .wrap(Wrap { trim: false });
+
+    f.render_widget(block, chunks[0]);
+
+    let footer = if app.schema_list.is_empty() {
+        Paragraph::new(Line::from(vec![
+            Span::styled(" N ", Style::default().fg(ACCENT).bold()),
+            Span::raw("create new  "),
+            Span::styled(" Q ", Style::default().fg(ACCENT).bold()),
+            Span::raw("quit"),
+        ]))
+    } else {
+        Paragraph::new(Line::from(vec![
+            Span::styled(" ↑↓ ", Style::default().fg(ACCENT).bold()),
+            Span::raw("navigate  "),
+            Span::styled(" Enter ", Style::default().fg(ACCENT).bold()),
+            Span::raw("select  "),
+            Span::styled(" Q ", Style::default().fg(ACCENT).bold()),
+            Span::raw("quit"),
+        ]))
+    }
+    .style(Style::default().bg(HEADER_BG));
+    f.render_widget(footer, chunks[1]);
 }
 
 // ── List screen ──────────────────────────────────────────────────────────────────────
@@ -37,13 +124,16 @@ fn render_list(f: &mut Frame, app: &App) {
         .constraints([Constraint::Length(1), Constraint::Min(0), Constraint::Length(1)])
         .split(f.area());
 
-    // Tabs row
-    let tabs = vec!["Decisions", "Schema", "Config"];
-    let tab_labels: Vec<Line> = tabs.iter().map(|t| Line::from(*t)).collect();
+    // Tabs row — show schema name
+    let tabs = vec![
+        format!(" Decisions ({}) ", app.decisions.len()),
+        format!(" Schema: {} ", app.schema_name),
+    ];
+    let tab_labels: Vec<Line> = tabs.iter().map(|t| Line::from(t.as_str())).collect();
     let tab_bar = ratatui::widgets::Tabs::new(tab_labels)
         .select(0)
         .style(Style::default().fg(ACCENT))
-        .divider(" ");
+        .divider("  ");
     f.render_widget(tab_bar, chunks[0]);
 
     // Decision list
@@ -68,12 +158,12 @@ fn render_list(f: &mut Frame, app: &App) {
             let line = if i == app.selected_idx {
                 Line::from(vec![
                     Span::styled(format!(" > {} ", d.label), Style::default().fg(ACCENT).bold()),
-                    Span::styled(format!("({})", preconds), Style::default().fg(DIM)),
+                    Span::styled(format!("({preconds})"), Style::default().fg(DIM)),
                 ])
             } else {
                 Line::from(vec![
                     Span::styled(format!("   {} ", d.label), Style::default().fg(Color::White)),
-                    Span::styled(format!("({})", preconds), Style::default().fg(DIM)),
+                    Span::styled(format!("({preconds})"), Style::default().fg(DIM)),
                 ])
             };
             ListItem::new(line)
@@ -100,6 +190,10 @@ fn render_list(f: &mut Frame, app: &App) {
         Span::raw("details  "),
         Span::styled(" R ", Style::default().fg(ACCENT).bold()),
         Span::raw("run sim  "),
+        Span::styled(" S ", Style::default().fg(ACCENT).bold()),
+        Span::raw("states  "),
+        Span::styled(" E ", Style::default().fg(ACCENT).bold()),
+        Span::raw("edit  "),
         Span::styled(" Q ", Style::default().fg(ACCENT).bold()),
         Span::raw("quit"),
     ]))
@@ -203,7 +297,7 @@ fn render_detail(f: &mut Frame, app: &App) {
         };
         lines.push(Line::from(vec![
             Span::raw("   "),
-            Span::styled(format!("{:.0}% ", pct), Style::default().fg(ACCENT).bold()),
+            Span::styled(format!("{pct:.0}% "), Style::default().fg(ACCENT).bold()),
             Span::styled(label, Style::default().fg(Color::White)),
         ]));
 
@@ -349,9 +443,9 @@ fn render_results(f: &mut Frame, app: &App) {
             }
             let delta = dist.mean - initial;
             let delta_str = if delta >= 0.0 {
-                Span::styled(format!("+{:.1}", delta), Style::default().fg(GOOD))
+                Span::styled(format!("+{delta:.1}"), Style::default().fg(GOOD))
             } else {
-                Span::styled(format!("{:.1}", delta), Style::default().fg(BAD))
+                Span::styled(format!("{delta:.1}"), Style::default().fg(BAD))
             };
             lines.push(Line::from(vec![
                 Span::raw(format!("   {:<22} ", attr.name)),
@@ -381,11 +475,10 @@ fn render_results(f: &mut Frame, app: &App) {
             };
             lines.push(Line::from(vec![
                 Span::raw(format!(
-                    "   Step 0: {:.0}  →  Step {}: {:.0}  Δ={:+.0}",
+                    "   Step 0: {:.0}  →  Step {}: {:.0}  Δ={delta:+.0}",
                     first.mean,
                     last.step,
                     last.mean,
-                    delta
                 )),
                 trend,
             ]));
@@ -441,7 +534,7 @@ fn render_state_manager(f: &mut Frame, app: &App) {
         .filter_map(|a| {
             let val = app.current_state.get(&a.name).unwrap_or(0.0);
             if val != 0.0 {
-                Some(format!("{}= {:.0}", a.name, val))
+                Some(format!("{}= {val:.0}", a.name))
             } else {
                 None
             }
@@ -452,6 +545,31 @@ fn render_state_manager(f: &mut Frame, app: &App) {
         Style::default().fg(DIM),
     )));
     lines.push(Line::raw(""));
+
+    // Confirmation prompt
+    if let Some(msg) = &app.confirm_delete {
+        lines.push(Line::from(Span::styled(
+            format!(" Delete \"{msg}\"? (y/n) "),
+            Style::default().fg(BAD).bold(),
+        )));
+        lines.push(Line::raw(""));
+        let block = Paragraph::new(lines)
+            .block(
+                Block::default()
+                    .title(Line::from(format!(" State Manager ")))
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(ACCENT)),
+            )
+            .wrap(Wrap { trim: false });
+        f.render_widget(block, chunks[0]);
+        let footer = Paragraph::new(Line::from(vec![
+            Span::styled(" y/n ", Style::default().fg(ACCENT).bold()),
+            Span::raw("confirm/deny  "),
+        ]))
+        .style(Style::default().bg(HEADER_BG));
+        f.render_widget(footer, chunks[1]);
+        return;
+    }
 
     // Saved states list
     if app.saved_states.is_empty() {
@@ -475,7 +593,7 @@ fn render_state_manager(f: &mut Frame, app: &App) {
                 .values
                 .iter()
                 .take(4)
-                .map(|v| format!("{:.0}", v))
+                .map(|v| format!("{v:.0}"))
                 .collect::<Vec<_>>()
                 .join(", ");
             lines.push(Line::from(vec![
@@ -485,7 +603,7 @@ fn render_state_manager(f: &mut Frame, app: &App) {
                     style,
                 ),
                 Span::styled(
-                    format!("[{}]", preview),
+                    format!("[{preview}]"),
                     Style::default().fg(DIM),
                 ),
             ]));
@@ -537,7 +655,7 @@ fn render_state_manager(f: &mut Frame, app: &App) {
         Paragraph::new(Line::from(vec![
             Span::styled(" ↑↓ ", Style::default().fg(ACCENT).bold()),
             Span::raw("select  "),
-            Span::styled(" Enter ", Style::default().fg(ACCENT).bold()),
+            Span::styled(" Enter/L ", Style::default().fg(ACCENT).bold()),
             Span::raw("load  "),
             Span::styled(" N ", Style::default().fg(ACCENT).bold()),
             Span::raw("save  "),
@@ -551,6 +669,612 @@ fn render_state_manager(f: &mut Frame, app: &App) {
             Span::raw("quit"),
         ]))
     }
+    .style(Style::default().bg(HEADER_BG));
+    f.render_widget(footer, chunks[1]);
+}
+
+// ── Edit Decisions list screen ───────────────────────────────────────────────────────
+
+fn render_edit_decisions(f: &mut Frame, app: &App) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0), Constraint::Length(1)])
+        .split(f.area());
+
+    let mut lines: Vec<Line> = Vec::new();
+
+    lines.push(Line::from(Span::styled(
+        " Edit Decisions:",
+        Style::default().fg(ACCENT).bold(),
+    )));
+    lines.push(Line::raw(""));
+
+    // Confirmation prompt
+    if let Some(ref msg) = app.confirm_delete {
+        lines.push(Line::from(Span::styled(
+            format!(" Delete \"{msg}\"? (y/n)"),
+            Style::default().fg(BAD).bold(),
+        )));
+        let block = Paragraph::new(lines)
+            .block(
+                Block::default()
+                    .title(" Edit Decisions ")
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(ACCENT)),
+            )
+            .wrap(Wrap { trim: false });
+        f.render_widget(block, chunks[0]);
+        let footer = Paragraph::new(Line::from(vec![
+            Span::styled(" y/n ", Style::default().fg(ACCENT).bold()),
+            Span::raw("confirm/deny  "),
+        ]))
+        .style(Style::default().bg(HEADER_BG));
+        f.render_widget(footer, chunks[1]);
+        return;
+    }
+
+    if app.edit_decisions.is_empty() {
+        lines.push(Line::from(Span::styled(
+            " No decisions. Press N to add one.",
+            Style::default().fg(DIM),
+        )));
+    } else {
+        for (i, d) in app.edit_decisions.iter().enumerate() {
+            let cursor = if i == app.edit_decision_idx { " > " } else { "   " };
+            let style = if i == app.edit_decision_idx {
+                Style::default().fg(ACCENT).bold()
+            } else {
+                Style::default().fg(Color::White)
+            };
+            let precond_count = d.preconditions.len();
+            let outcome_count = d.outcomes.len();
+            lines.push(Line::from(vec![
+                Span::styled(cursor, style),
+                Span::styled(format!("{:<30}", d.label), style),
+                Span::styled(
+                    format!("({precond_count} pre, {outcome_count} outcomes)"),
+                    Style::default().fg(DIM),
+                ),
+            ]));
+        }
+    }
+
+    let block = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .title(" Edit Decisions ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(ACCENT)),
+        )
+        .wrap(Wrap { trim: false });
+    f.render_widget(block, chunks[0]);
+
+    let footer = Paragraph::new(Line::from(vec![
+        Span::styled(" ↑↓ ", Style::default().fg(ACCENT).bold()),
+        Span::raw("navigate  "),
+        Span::styled(" Enter ", Style::default().fg(ACCENT).bold()),
+        Span::raw("edit  "),
+        Span::styled(" D ", Style::default().fg(ACCENT).bold()),
+        Span::raw("delete  "),
+        Span::styled(" Esc ", Style::default().fg(ACCENT).bold()),
+        Span::raw("back  "),
+        Span::styled(" Q ", Style::default().fg(ACCENT).bold()),
+        Span::raw("quit"),
+    ]))
+    .style(Style::default().bg(HEADER_BG));
+    f.render_widget(footer, chunks[1]);
+}
+
+// ── Edit Decision Detail screen ──────────────────────────────────────────────────────
+
+fn render_edit_decision_detail(f: &mut Frame, app: &App) {
+    let state = match &app.edit_decision_detail {
+        Some(s) => s,
+        None => {
+            render_error(f, "No decision edit state.");
+            return;
+        }
+    };
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0), Constraint::Length(1)])
+        .split(f.area());
+
+    let mut lines: Vec<Line> = Vec::new();
+    lines.push(Line::from(Span::styled(
+        format!(" Editing Decision [{}]: ", state.idx),
+        Style::default().fg(ACCENT).bold(),
+    )));
+
+    // ── Label ───────────────────────────────────────────────────────────────────────
+    let is_label = state.active_field == EditField::Label;
+    let label_style = if is_label {
+        Style::default().fg(YELLOW).bold()
+    } else {
+        Style::default().fg(Color::White)
+    };
+    lines.push(Line::from(vec![
+        Span::styled(" Label: ", Style::default().fg(DIM)),
+        Span::styled(format!("{} ", state.label), label_style),
+        if is_label {
+            Span::styled("▌", Style::default().fg(YELLOW))
+        } else {
+            Span::raw("")
+        },
+    ]));
+
+    // ── Preconditions ───────────────────────────────────────────────────────────────
+    let is_pre = state.active_field == EditField::Preconditions;
+    let pre_header = if is_pre { "─ Preconditions (editing) ─" } else { " Preconditions:" };
+    lines.push(Line::from(Span::styled(pre_header, Style::default().fg(DIM))));
+    for (j, c) in state.preconditions.iter().enumerate() {
+        let sel = if is_pre && j == state.list_idx { " > " } else { "   " };
+        let s = if is_pre && j == state.list_idx {
+            Style::default().fg(ACCENT).bold()
+        } else {
+            Style::default().fg(Color::White)
+        };
+        lines.push(Line::from(vec![
+            Span::styled(sel, s),
+            Span::styled(format!("{} {:?} {}", c.attribute, c.operator, c.value), s),
+        ]));
+    }
+    if is_pre {
+        lines.push(Line::from(Span::styled(
+            "   [a] add condition  [d] delete selected",
+            Style::default().fg(DIM),
+        )));
+    }
+
+    // ── Cost effects ────────────────────────────────────────────────────────────────
+    let is_cost = state.active_field == EditField::CostEffects;
+    let cost_header = if is_cost { "─ Cost effects (editing) ─" } else { " Cost:" };
+    lines.push(Line::from(Span::styled(cost_header, Style::default().fg(DIM))));
+    for (j, e) in state.cost.iter().enumerate() {
+        let sel = if is_cost && j == state.list_idx { " > " } else { "   " };
+        let s = if is_cost && j == state.list_idx {
+            Style::default().fg(ACCENT).bold()
+        } else {
+            Style::default().fg(Color::White)
+        };
+        let sign = if e.delta >= 0.0 { "+" } else { "" };
+        let aname = e.attribute.as_deref().unwrap_or("?");
+        lines.push(Line::from(vec![
+            Span::styled(sel, s),
+            Span::styled(format!("{aname} {sign}{}", e.delta), s),
+        ]));
+    }
+    if is_cost {
+        lines.push(Line::from(Span::styled(
+            "   [a] add effect  [d] delete selected",
+            Style::default().fg(DIM),
+        )));
+    }
+
+    // ── Outcomes ────────────────────────────────────────────────────────────────────
+    let is_out = state.active_field == EditField::Outcomes;
+    let out_header = if is_out { "─ Outcomes (editing) ─" } else { " Outcomes:" };
+    lines.push(Line::from(Span::styled(out_header, Style::default().fg(DIM))));
+    for (j, o) in state.outcomes.iter().enumerate() {
+        let sel = if is_out && j == state.list_idx { " > " } else { "   " };
+        let s = if is_out && j == state.list_idx {
+            Style::default().fg(ACCENT).bold()
+        } else {
+            Style::default().fg(Color::White)
+        };
+        lines.push(Line::from(vec![
+            Span::styled(sel, s),
+            Span::styled(format!("\"{}\" w={}", o.label, o.weight), s),
+        ]));
+        // Show effects for the outcome
+        if let loom_core::NamedTransform::Declarative { effects, .. } = &o.transform {
+            for (k, eff) in effects.iter().enumerate() {
+                let prefix = if j == state.list_idx && is_out && k == state.sub_list_idx {
+                    "     > "
+                } else {
+                    "       "
+                };
+                let sign = if eff.delta >= 0.0 { "+" } else { "" };
+                let aname = eff.attribute.as_deref().unwrap_or("?");
+                lines.push(Line::from(Span::raw(format!(
+                    "{prefix}{aname} {sign}{}",
+                    eff.delta
+                ))));
+            }
+        }
+    }
+    if is_out {
+        lines.push(Line::from(Span::styled(
+            "   [a] add outcome  [d] delete selected  [e] edit sub-effects",
+            Style::default().fg(DIM),
+        )));
+    }
+
+    lines.push(Line::raw(""));
+    lines.push(Line::from(Span::styled(
+        " [Tab] switch field  [Enter] edit text  [Esc] save & back",
+        Style::default().fg(DIM),
+    )));
+
+    let block = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .title(" Edit Decision Detail ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(ACCENT)),
+        )
+        .wrap(Wrap { trim: false });
+    f.render_widget(block, chunks[0]);
+
+    let footer = Paragraph::new(Line::from(vec![
+        Span::styled(" Tab ", Style::default().fg(ACCENT).bold()),
+        Span::raw("field  "),
+        Span::styled(" ↑↓ ", Style::default().fg(ACCENT).bold()),
+        Span::raw("list item  "),
+        Span::styled(" Esc ", Style::default().fg(ACCENT).bold()),
+        Span::raw("save & back  "),
+        Span::styled(" Q ", Style::default().fg(ACCENT).bold()),
+        Span::raw("quit"),
+    ]))
+    .style(Style::default().bg(HEADER_BG));
+    f.render_widget(footer, chunks[1]);
+}
+
+// ── Edit Passives list screen ────────────────────────────────────────────────────────
+
+fn render_edit_passives(f: &mut Frame, app: &App) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0), Constraint::Length(1)])
+        .split(f.area());
+
+    let mut lines: Vec<Line> = Vec::new();
+    lines.push(Line::from(Span::styled(
+        " Edit Passives:",
+        Style::default().fg(ACCENT).bold(),
+    )));
+    lines.push(Line::raw(""));
+
+    // Confirmation prompt
+    if let Some(ref msg) = app.confirm_delete {
+        lines.push(Line::from(Span::styled(
+            format!(" Delete \"{msg}\"? (y/n)"),
+            Style::default().fg(BAD).bold(),
+        )));
+        let block = Paragraph::new(lines)
+            .block(
+                Block::default()
+                    .title(" Edit Passives ")
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(ACCENT)),
+            )
+            .wrap(Wrap { trim: false });
+        f.render_widget(block, chunks[0]);
+        let footer = Paragraph::new(Line::from(vec![
+            Span::styled(" y/n ", Style::default().fg(ACCENT).bold()),
+            Span::raw("confirm/deny  "),
+        ]))
+        .style(Style::default().bg(HEADER_BG));
+        f.render_widget(footer, chunks[1]);
+        return;
+    }
+
+    if app.edit_passives.is_empty() {
+        lines.push(Line::from(Span::styled(
+            " No passives. Press N to add one.",
+            Style::default().fg(DIM),
+        )));
+    } else {
+        for (i, p) in app.edit_passives.iter().enumerate() {
+            let cursor = if i == app.edit_passive_idx { " > " } else { "   " };
+            let style = if i == app.edit_passive_idx {
+                Style::default().fg(ACCENT).bold()
+            } else {
+                Style::default().fg(Color::White)
+            };
+            let effect_count = p.effects.len();
+            lines.push(Line::from(vec![
+                Span::styled(cursor, style),
+                Span::styled(format!("{:<30}", p.label), style),
+                Span::styled(
+                    format!("({effect_count} effects)"),
+                    Style::default().fg(DIM),
+                ),
+            ]));
+        }
+    }
+
+    let block = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .title(" Edit Passives ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(ACCENT)),
+        )
+        .wrap(Wrap { trim: false });
+    f.render_widget(block, chunks[0]);
+
+    let footer = Paragraph::new(Line::from(vec![
+        Span::styled(" ↑↓ ", Style::default().fg(ACCENT).bold()),
+        Span::raw("navigate  "),
+        Span::styled(" Enter ", Style::default().fg(ACCENT).bold()),
+        Span::raw("edit  "),
+        Span::styled(" D ", Style::default().fg(ACCENT).bold()),
+        Span::raw("delete  "),
+        Span::styled(" Esc ", Style::default().fg(ACCENT).bold()),
+        Span::raw("back  "),
+        Span::styled(" Q ", Style::default().fg(ACCENT).bold()),
+        Span::raw("quit"),
+    ]))
+    .style(Style::default().bg(HEADER_BG));
+    f.render_widget(footer, chunks[1]);
+}
+
+// ── Edit Passive Detail screen ──────────────────────────────────────────────────────
+
+fn render_edit_passive_detail(f: &mut Frame, app: &App) {
+    let state = match &app.edit_passive_detail {
+        Some(s) => s,
+        None => {
+            render_error(f, "No passive edit state.");
+            return;
+        }
+    };
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0), Constraint::Length(1)])
+        .split(f.area());
+
+    let mut lines: Vec<Line> = Vec::new();
+    lines.push(Line::from(Span::styled(
+        format!(" Editing Passive [{}]: ", state.idx),
+        Style::default().fg(ACCENT).bold(),
+    )));
+
+    lines.push(Line::from(vec![
+        Span::styled(" ID: ", Style::default().fg(DIM)),
+        Span::styled(&state.passive_id, Style::default().fg(Color::White)),
+    ]));
+
+    lines.push(Line::from(vec![
+        Span::styled(" Label: ", Style::default().fg(DIM)),
+        Span::styled(&state.label, Style::default().fg(Color::White)),
+    ]));
+
+    lines.push(Line::raw(""));
+    lines.push(Line::from(Span::styled(
+        " Effects:",
+        Style::default().fg(DIM),
+    )));
+
+    for (j, e) in state.effects.iter().enumerate() {
+        let sel = if j == state.list_idx { " > " } else { "   " };
+        let s = if j == state.list_idx {
+            Style::default().fg(ACCENT).bold()
+        } else {
+            Style::default().fg(Color::White)
+        };
+        let sign = if e.delta >= 0.0 { "+" } else { "" };
+        let aname = e.attribute.as_deref().unwrap_or("?");
+        lines.push(Line::from(vec![
+            Span::styled(sel, s),
+            Span::styled(format!("{aname} {sign}{}", e.delta), s),
+        ]));
+    }
+
+    lines.push(Line::styled(
+        " [a] add effect  [d] delete selected  [e] edit label  [Esc] save & back",
+        Style::default().fg(DIM),
+    ));
+
+    let block = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .title(" Edit Passive Detail ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(ACCENT)),
+        )
+        .wrap(Wrap { trim: false });
+    f.render_widget(block, chunks[0]);
+
+    let footer = Paragraph::new(Line::from(vec![
+        Span::styled(" ↑↓ ", Style::default().fg(ACCENT).bold()),
+        Span::raw("select effect  "),
+        Span::styled(" Esc ", Style::default().fg(ACCENT).bold()),
+        Span::raw("save & back  "),
+        Span::styled(" Q ", Style::default().fg(ACCENT).bold()),
+        Span::raw("quit"),
+    ]))
+    .style(Style::default().bg(HEADER_BG));
+    f.render_widget(footer, chunks[1]);
+}
+
+// ── Edit Goals list screen ───────────────────────────────────────────────────────────
+
+fn render_edit_goals(f: &mut Frame, app: &App) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0), Constraint::Length(1)])
+        .split(f.area());
+
+    let mut lines: Vec<Line> = Vec::new();
+    lines.push(Line::from(Span::styled(
+        " Edit Goals:",
+        Style::default().fg(ACCENT).bold(),
+    )));
+    lines.push(Line::raw(""));
+
+    // Confirmation prompt
+    if let Some(ref msg) = app.confirm_delete {
+        lines.push(Line::from(Span::styled(
+            format!(" Delete \"{msg}\"? (y/n)"),
+            Style::default().fg(BAD).bold(),
+        )));
+        let block = Paragraph::new(lines)
+            .block(
+                Block::default()
+                    .title(" Edit Goals ")
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(ACCENT)),
+            )
+            .wrap(Wrap { trim: false });
+        f.render_widget(block, chunks[0]);
+        let footer = Paragraph::new(Line::from(vec![
+            Span::styled(" y/n ", Style::default().fg(ACCENT).bold()),
+            Span::raw("confirm/deny  "),
+        ]))
+        .style(Style::default().bg(HEADER_BG));
+        f.render_widget(footer, chunks[1]);
+        return;
+    }
+
+    if app.edit_goals.is_empty() {
+        lines.push(Line::from(Span::styled(
+            " No goals. Press N to add one.",
+            Style::default().fg(DIM),
+        )));
+    } else {
+        for (i, (name, g)) in app.edit_goals.iter().enumerate() {
+            let cursor = if i == app.edit_goal_idx { " > " } else { "   " };
+            let style = if i == app.edit_goal_idx {
+                Style::default().fg(ACCENT).bold()
+            } else {
+                Style::default().fg(Color::White)
+            };
+            let w_count = g.weights.len();
+            let c_count = g.cliffs.len();
+            lines.push(Line::from(vec![
+                Span::styled(cursor, style),
+                Span::styled(format!("{:<20}", name), style),
+                Span::styled(
+                    format!("({w_count} weights, {c_count} cliffs)"),
+                    Style::default().fg(DIM),
+                ),
+            ]));
+        }
+    }
+
+    let block = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .title(" Edit Goals ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(ACCENT)),
+        )
+        .wrap(Wrap { trim: false });
+    f.render_widget(block, chunks[0]);
+
+    let footer = Paragraph::new(Line::from(vec![
+        Span::styled(" ↑↓ ", Style::default().fg(ACCENT).bold()),
+        Span::raw("navigate  "),
+        Span::styled(" Enter ", Style::default().fg(ACCENT).bold()),
+        Span::raw("edit  "),
+        Span::styled(" D ", Style::default().fg(ACCENT).bold()),
+        Span::raw("delete  "),
+        Span::styled(" Esc ", Style::default().fg(ACCENT).bold()),
+        Span::raw("back  "),
+        Span::styled(" Q ", Style::default().fg(ACCENT).bold()),
+        Span::raw("quit"),
+    ]))
+    .style(Style::default().bg(HEADER_BG));
+    f.render_widget(footer, chunks[1]);
+}
+
+// ── Edit Goal Detail screen ─────────────────────────────────────────────────────────
+
+fn render_edit_goal_detail(f: &mut Frame, app: &App) {
+    let state = match &app.edit_goal_detail {
+        Some(s) => s,
+        None => {
+            render_error(f, "No goal edit state.");
+            return;
+        }
+    };
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0), Constraint::Length(1)])
+        .split(f.area());
+
+    let mut lines: Vec<Line> = Vec::new();
+    lines.push(Line::from(Span::styled(
+        format!(" Editing Goal \"{}\": ", state.goal_name),
+        Style::default().fg(ACCENT).bold(),
+    )));
+    lines.push(Line::raw(""));
+
+    // Toggle between weights and cliffs
+    let mode_str = if state.show_weights { "Weights" } else { "Cliffs" };
+    lines.push(Line::from(Span::styled(
+        format!(" [{mode_str}]  Tab to switch"),
+        Style::default().fg(DIM),
+    )));
+    lines.push(Line::raw(""));
+
+    if state.show_weights {
+        for (j, (name, w)) in state.weights.iter().enumerate() {
+            let sel = if j == state.list_idx { " > " } else { "   " };
+            let s = if j == state.list_idx {
+                Style::default().fg(ACCENT).bold()
+            } else {
+                Style::default().fg(Color::White)
+            };
+            lines.push(Line::from(vec![
+                Span::styled(sel, s),
+                Span::styled(format!("{name:<20} = {w:.2}"), s),
+            ]));
+        }
+        lines.push(Line::from(Span::styled(
+            " [a] add weight  [d] delete selected  [e] edit value",
+            Style::default().fg(DIM),
+        )));
+    } else {
+        for (j, (name, t)) in state.cliffs.iter().enumerate() {
+            let sel = if j == state.list_idx { " > " } else { "   " };
+            let s = if j == state.list_idx {
+                Style::default().fg(ACCENT).bold()
+            } else {
+                Style::default().fg(Color::White)
+            };
+            lines.push(Line::from(vec![
+                Span::styled(sel, s),
+                Span::styled(format!("{name:<20} min={} pen={}", t.min, t.penalty), s),
+            ]));
+        }
+        lines.push(Line::from(Span::styled(
+            " [a] add cliff  [d] delete selected  [e] edit values",
+            Style::default().fg(DIM),
+        )));
+    }
+
+    lines.push(Line::raw(""));
+    lines.push(Line::from(Span::styled(
+        " [Esc] save & back",
+        Style::default().fg(DIM),
+    )));
+
+    let block = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .title(" Edit Goal Detail ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(ACCENT)),
+        )
+        .wrap(Wrap { trim: false });
+    f.render_widget(block, chunks[0]);
+
+    let footer = Paragraph::new(Line::from(vec![
+        Span::styled(" ↑↓ ", Style::default().fg(ACCENT).bold()),
+        Span::raw("item  "),
+        Span::styled(" Tab ", Style::default().fg(ACCENT).bold()),
+        Span::raw("weights/cliffs  "),
+        Span::styled(" Esc ", Style::default().fg(ACCENT).bold()),
+        Span::raw("save & back  "),
+        Span::styled(" Q ", Style::default().fg(ACCENT).bold()),
+        Span::raw("quit"),
+    ]))
     .style(Style::default().bg(HEADER_BG));
     f.render_widget(footer, chunks[1]);
 }

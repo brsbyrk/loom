@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "attributes": [
+    {"name": "cash",            "unit": "$",   "bounds": [0, 500000], "description": "Liquid cash on hand"},
+    {"name": "stocks",          "unit": "$",   "bounds": [0, 500000], "description": "Stock portfolio value"},
+    {"name": "bonds",           "unit": "$",   "bounds": [0, 500000], "description": "Bond holdings value"},
+    {"name": "real_estate",     "unit": "$",   "bounds": [0, 1000000], "description": "Real estate equity value"},
+    {"name": "debt",            "unit": "$",   "bounds": [0, 200000], "description": "Total outstanding debt"},
+    {"name": "monthly_income",  "unit": "$",   "bounds": [0, 30000], "description": "Recurring monthly income"},
+    {"name": "monthly_expenses","unit": "$",   "bounds": [0, 20000], "description": "Recurring monthly expenses"},
+    {"name": "credit_score",    "unit": "pts", "bounds": [300, 850], "description": "Credit score"},
+    {"name": "risk_tolerance",  "unit": "pts", "bounds": [0, 100], "description": "Willingness to take financial risk"},
+    {"name": "retirement_savings", "unit": "$", "bounds": [0, 1000000], "description": "Total retirement account value"}
+  ]
+}

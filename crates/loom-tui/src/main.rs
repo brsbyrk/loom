@@ -6,61 +6,19 @@
 mod app;
 mod ui;
 
-use app::{App, Screen};
-use loom_core::DynamicState;
+use app::{App, EditField, Screen};
+use loom_core::{NamedCondition, NamedEffect, NamedOutcome, NamedTransform};
 use loom_store::Store;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::DefaultTerminal;
-use std::sync::Arc;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ── Load from DB ────────────────────────────────────────────────────────────
     let store = Store::open_default()?;
+    let schema_list = store.list_schemas()?;
 
-    let schema = Arc::new(
-        store
-            .get_schema("personal")?
-            .ok_or("No schema 'personal' in DB — run seed first:\n  cargo run --example seed -p loom-store")?,
-    );
-
-    let named_decisions = store.list_decisions("personal")?;
-    let decisions: Vec<_> = named_decisions
-        .iter()
-        .map(|nd| nd.resolve(&schema))
-        .collect::<Result<_, _>>()
-        .map_err(|e| format!("failed to resolve decision: {e}"))?;
-
-    let named_passives = store.list_passives("personal")?;
-    let passives: Vec<_> = named_passives
-        .iter()
-        .map(|np| np.resolve(&schema))
-        .collect::<Result<_, _>>()
-        .map_err(|e| format!("failed to resolve passive: {e}"))?;
-
-    let named_goal = store
-        .get_goal("personal", "default")?
-        .ok_or("No goal 'default' in DB — run seed first")?;
-    let goal = named_goal
-        .resolve(&schema)
-        .map_err(|e| format!("failed to resolve goal: {e}"))?;
-
-    // ── Initial state ────────────────────────────────────────────────────────────
-    let mut current_state = DynamicState::new(schema.clone());
-    current_state.set("wealth.cash", 50000.0);
-    current_state.set("wealth.stocks", 25000.0);
-    current_state.set("wealth.house_value", 200000.0);
-    current_state.set("wealth.debt", 50000.0);
-    current_state.set("health.physical", 75.0);
-    current_state.set("health.stress", 30.0);
-    current_state.set("skills.rust", 70.0);
-    current_state.set("skills.python", 45.0);
-    current_state.set("skills.negotiation", 55.0);
-    current_state.set("social.bob", 60.0);
-    current_state.set("social.alice", 85.0);
-    current_state.set("time_free", 40.0);
-
-    // ── App ──────────────────────────────────────────────────────────────────────
-    let mut app = App::new(store, schema, decisions, passives, goal, current_state);
+    // ── App (start in schema browser) ───────────────────────────────────────────
+    let mut app = App::new_browsing(store, schema_list);
 
     // ── Terminal ─────────────────────────────────────────────────────────────────
     let mut terminal = ratatui::init();
@@ -79,95 +37,636 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App) -> Result<(), Box<dyn std:
             if key.kind == KeyEventKind::Release {
                 continue;
             }
-            match &app.screen {
-                Screen::List => match key.code {
-                    KeyCode::Char('q') | KeyCode::Char('Q') => return Ok(()),
-                    KeyCode::Up | KeyCode::Char('k') => app.select_prev(),
-                    KeyCode::Down | KeyCode::Char('j') => app.select_next(),
-                    KeyCode::Enter => app.screen = Screen::Detail,
-                    KeyCode::Char('r') | KeyCode::Char('R') => app.run_simulation(),
-                    KeyCode::Char('s') | KeyCode::Char('S') => app.open_state_manager(),
-                    _ => {}
-                },
-                Screen::Detail => match key.code {
-                    KeyCode::Char('q') | KeyCode::Char('Q') => return Ok(()),
-                    KeyCode::Esc => {
-                        app.screen = Screen::List;
-                        app.scroll.offset = 0;
-                    }
-                    KeyCode::Char('r') | KeyCode::Char('R') => app.run_simulation(),
-                    KeyCode::Char('s') | KeyCode::Char('S') => app.open_state_manager(),
-                    _ => {}
-                },
-                Screen::Results => match key.code {
-                    KeyCode::Char('q') | KeyCode::Char('Q') => return Ok(()),
-                    KeyCode::Esc => {
-                        app.screen = Screen::List;
-                        app.scroll.offset = 0;
-                    }
-                    KeyCode::Char('r') | KeyCode::Char('R') => app.run_simulation(),
-                    KeyCode::Char('s') | KeyCode::Char('S') => app.open_state_manager(),
-                    _ => {}
-                },
-                Screen::StateManager => match key.code {
-                    KeyCode::Char('q') | KeyCode::Char('Q') => return Ok(()),
-                    KeyCode::Esc => {
-                        if app.input_mode {
-                            app.input_mode = false;
-                            app.save_name.clear();
-                            app.save_note.clear();
-                        } else {
-                            app.screen = app.prev_screen.clone();
-                        }
-                    }
-                    KeyCode::Enter => {
-                        if app.input_mode {
-                            app.save_current_state();
-                        } else {
-                            app.load_state();
-                        }
-                    }
-                    KeyCode::Up | KeyCode::Char('k') => {
-                        if !app.input_mode {
-                            app.state_prev()
-                        }
-                    }
-                    KeyCode::Down | KeyCode::Char('j') => {
-                        if !app.input_mode {
-                            app.state_next()
-                        }
-                    }
-                    KeyCode::Char('n') | KeyCode::Char('N') => {
-                        if !app.input_mode {
-                            app.input_mode = true;
-                            app.save_name.clear();
-                            app.save_note.clear();
-                        }
-                    }
-                    KeyCode::Char('d') | KeyCode::Char('D') => {
-                        if !app.input_mode {
-                            app.delete_state();
-                        }
-                    }
-                    KeyCode::Char('b') | KeyCode::Char('B') => {
-                        if !app.input_mode {
-                            app.input_mode = true;
-                            app.branching = true;
-                            app.save_name.clear();
-                            app.save_note = format!("branch from {}",
-                                app.saved_states.get(app.state_idx)
-                                    .map_or("?", |s| s.name.as_str()));
-                        }
-                    }
-                    KeyCode::Char(c) => app.input_char(c),
-                    KeyCode::Backspace => app.input_backspace(),
-                    _ => {}
-                },
+            match app.screen.clone() {
+                Screen::SchemaList => handle_schema_list(app, key.code),
+                Screen::List => handle_list(app, key.code),
+                Screen::Detail => handle_detail(app, key.code),
+                Screen::Results => handle_results(app, key.code),
+                Screen::StateManager => handle_state_manager(app, key.code),
                 Screen::Error(_) => match key.code {
                     KeyCode::Char('q') | KeyCode::Char('Q') => return Ok(()),
                     _ => {}
                 },
+                Screen::EditDecisions => handle_edit_decisions(app, key.code),
+                Screen::EditDecisionDetail => handle_edit_decision_detail(app, key.code),
+                Screen::EditPassives => handle_edit_passives(app, key.code),
+                Screen::EditPassiveDetail => handle_edit_passive_detail(app, key.code),
+                Screen::EditGoals => handle_edit_goals(app, key.code),
+                Screen::EditGoalDetail => handle_edit_goal_detail(app, key.code),
             }
         }
+    }
+}
+
+// ── Screen handlers ─────────────────────────────────────────────────────────────
+
+fn handle_schema_list(app: &mut App, code: KeyCode) {
+    match code {
+        KeyCode::Char('q') | KeyCode::Char('Q') => std::process::exit(0),
+        KeyCode::Up | KeyCode::Char('k') => {
+            if !app.schema_list.is_empty() {
+                app.schema_idx = app
+                    .schema_idx
+                    .checked_sub(1)
+                    .unwrap_or(app.schema_list.len() - 1);
+            }
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            if !app.schema_list.is_empty() {
+                app.schema_idx = (app.schema_idx + 1) % app.schema_list.len();
+            }
+        }
+        KeyCode::Enter => {
+            if let Some(s) = app.schema_list.get(app.schema_idx) {
+                let name = s.name.clone();
+                match app.load_schema(&name) {
+                    Ok(()) => {
+                        app.init_default_state();
+                        app.selected_idx = 0;
+                        app.screen = Screen::List;
+                    }
+                    Err(e) => app.screen = Screen::Error(e),
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn handle_list(app: &mut App, code: KeyCode) {
+    match code {
+        KeyCode::Char('q') | KeyCode::Char('Q') => std::process::exit(0),
+        KeyCode::Up | KeyCode::Char('k') => app.select_prev(),
+        KeyCode::Down | KeyCode::Char('j') => app.select_next(),
+        KeyCode::Enter => app.screen = Screen::Detail,
+        KeyCode::Char('r') | KeyCode::Char('R') => app.run_simulation(),
+        KeyCode::Char('s') | KeyCode::Char('S') => app.open_state_manager(),
+        KeyCode::Char('e') | KeyCode::Char('E') => app.open_edit_decisions(),
+        KeyCode::Char('p') | KeyCode::Char('P') => app.open_edit_passives(),
+        KeyCode::Char('g') | KeyCode::Char('G') => app.open_edit_goals(),
+        _ => {}
+    }
+}
+
+fn handle_detail(app: &mut App, code: KeyCode) {
+    match code {
+        KeyCode::Char('q') | KeyCode::Char('Q') => std::process::exit(0),
+        KeyCode::Esc => {
+            app.screen = Screen::List;
+            app.scroll.offset = 0;
+        }
+        KeyCode::Char('r') | KeyCode::Char('R') => app.run_simulation(),
+        KeyCode::Char('s') | KeyCode::Char('S') => app.open_state_manager(),
+        _ => {}
+    }
+}
+
+fn handle_results(app: &mut App, code: KeyCode) {
+    match code {
+        KeyCode::Char('q') | KeyCode::Char('Q') => std::process::exit(0),
+        KeyCode::Esc => {
+            app.screen = Screen::List;
+            app.scroll.offset = 0;
+        }
+        KeyCode::Char('r') | KeyCode::Char('R') => app.run_simulation(),
+        KeyCode::Char('s') | KeyCode::Char('S') => app.open_state_manager(),
+        _ => {}
+    }
+}
+
+fn handle_state_manager(app: &mut App, code: KeyCode) {
+    // Confirmation mode
+    if app.confirm_delete.is_some() {
+        match code {
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                app.delete_state();
+                app.confirm_delete = None;
+            }
+            _ => {
+                app.confirm_delete = None;
+            }
+        }
+        return;
+    }
+
+    match code {
+        KeyCode::Char('q') | KeyCode::Char('Q') => std::process::exit(0),
+        KeyCode::Esc => {
+            if app.input_mode {
+                app.input_mode = false;
+                app.save_name.clear();
+                app.save_note.clear();
+            } else {
+                app.screen = app.prev_screen.clone();
+            }
+        }
+        KeyCode::Enter => {
+            if app.input_mode {
+                app.save_current_state();
+            } else {
+                app.load_state();
+            }
+        }
+        KeyCode::Char('l') | KeyCode::Char('L') => {
+            if !app.input_mode {
+                app.load_state();
+            }
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            if !app.input_mode {
+                app.state_prev()
+            }
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            if !app.input_mode {
+                app.state_next()
+            }
+        }
+        KeyCode::Char('n') | KeyCode::Char('N') => {
+            if !app.input_mode {
+                app.input_mode = true;
+                app.save_name.clear();
+                app.save_note.clear();
+            }
+        }
+        KeyCode::Char('d') | KeyCode::Char('D') => {
+            if !app.input_mode {
+                if let Some(s) = app.saved_states.get(app.state_idx) {
+                    app.confirm_delete = Some(s.name.clone());
+                }
+            }
+        }
+        KeyCode::Char('b') | KeyCode::Char('B') => {
+            if !app.input_mode {
+                app.input_mode = true;
+                app.branching = true;
+                app.save_name.clear();
+                app.save_note = format!(
+                    "branch from {}",
+                    app.saved_states
+                        .get(app.state_idx)
+                        .map_or("?", |s| s.name.as_str())
+                );
+            }
+        }
+        KeyCode::Char(c) => app.input_char(c),
+        KeyCode::Backspace => app.input_backspace(),
+        _ => {}
+    }
+}
+
+// ── Edit decisions list ─────────────────────────────────────────────────────────
+
+fn handle_edit_decisions(app: &mut App, code: KeyCode) {
+    // Confirmation mode
+    if app.confirm_delete.is_some() {
+        match code {
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                let idx = app.edit_decision_idx;
+                app.delete_edit_decision(idx);
+                app.confirm_delete = None;
+            }
+            _ => {
+                app.confirm_delete = None;
+            }
+        }
+        return;
+    }
+
+    match code {
+        KeyCode::Char('q') | KeyCode::Char('Q') => std::process::exit(0),
+        KeyCode::Esc => {
+            app.screen = Screen::List;
+        }
+        KeyCode::Up | KeyCode::Char('k') => app.edit_decision_prev(),
+        KeyCode::Down | KeyCode::Char('j') => app.edit_decision_next(),
+        KeyCode::Enter => {
+            if !app.edit_decisions.is_empty() {
+                app.open_decision_detail(app.edit_decision_idx);
+            }
+        }
+        KeyCode::Char('d') | KeyCode::Char('D') => {
+            if let Some(d) = app.edit_decisions.get(app.edit_decision_idx) {
+                app.confirm_delete = Some(d.label.clone());
+            }
+        }
+        _ => {}
+    }
+}
+
+// ── Edit decision detail ────────────────────────────────────────────────────────
+
+fn handle_edit_decision_detail(app: &mut App, code: KeyCode) {
+    match code {
+        KeyCode::Char('q') | KeyCode::Char('Q') => std::process::exit(0),
+        KeyCode::Esc => {
+            app.save_decision_edit();
+        }
+        KeyCode::Tab => {
+            if let Some(ref mut state) = app.edit_decision_detail {
+                state.active_field = match state.active_field {
+                    EditField::Label => EditField::Preconditions,
+                    EditField::Preconditions => EditField::CostEffects,
+                    EditField::CostEffects => EditField::Outcomes,
+                    EditField::Outcomes => EditField::Label,
+                    _ => EditField::Label,
+                };
+                state.list_idx = 0;
+                state.sub_list_idx = 0;
+            }
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            if let Some(ref mut state) = app.edit_decision_detail {
+                match state.active_field {
+                    EditField::Preconditions | EditField::CostEffects => {
+                        if state.list_idx > 0 {
+                            state.list_idx -= 1;
+                        }
+                    }
+                    EditField::Outcomes => {
+                        if state.sub_list_idx > 0
+                            && state.sub_list_idx == state.list_idx
+                        {
+                            // Moving from sub-effects back to outcome list
+                            state.sub_list_idx = 0;
+                        } else if state.list_idx > 0 {
+                            state.list_idx -= 1;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            if let Some(ref mut state) = app.edit_decision_detail {
+                match state.active_field {
+                    EditField::Preconditions => {
+                        if state.list_idx + 1 < state.preconditions.len() {
+                            state.list_idx += 1;
+                        }
+                    }
+                    EditField::CostEffects => {
+                        if state.list_idx + 1 < state.cost.len() {
+                            state.list_idx += 1;
+                        }
+                    }
+                    EditField::Outcomes => {
+                        if state.sub_list_idx > 0 {
+                            // Move down within sub-effects
+                            if let Some(outcome) =
+                                state.outcomes.get(state.list_idx)
+                            {
+                                if let NamedTransform::Declarative { effects, .. } =
+                                    &outcome.transform
+                                {
+                                    if state.sub_list_idx + 1 <= effects.len() {
+                                        state.sub_list_idx += 1;
+                                    }
+                                }
+                            }
+                            // Exited sub-list
+                            if let Some(outcome) =
+                                state.outcomes.get(state.list_idx)
+                            {
+                                if let NamedTransform::Declarative { effects, .. } =
+                                    &outcome.transform
+                                {
+                                    if state.sub_list_idx > effects.len() {
+                                        state.sub_list_idx = 0;
+                                        if state.list_idx + 1 < state.outcomes.len() {
+                                            state.list_idx += 1;
+                                        }
+                                    }
+                                }
+                            }
+                        } else if state.list_idx + 1 < state.outcomes.len() {
+                            state.list_idx += 1;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        KeyCode::Char('a') | KeyCode::Char('A') => {
+            if let Some(ref mut state) = app.edit_decision_detail {
+                match state.active_field {
+                    EditField::Preconditions => {
+                        state.preconditions.push(NamedCondition {
+                            attribute: "attr".into(),
+                            operator: loom_core::ComparisonOp::Gt,
+                            value: 0.0,
+                        });
+                        state.list_idx = state.preconditions.len() - 1;
+                    }
+                    EditField::CostEffects => {
+                        state.cost.push(NamedEffect {
+                            attribute: Some("attr".into()),
+                            group: None,
+                            delta: 0.0,
+                            scaling: vec![],
+                        });
+                        state.list_idx = state.cost.len() - 1;
+                    }
+                    EditField::Outcomes => {
+                        state.outcomes.push(NamedOutcome {
+                            label: "new_outcome".into(),
+                            weight: 50.0,
+                            condition: None,
+                            transform: NamedTransform::Declarative {
+                                effects: vec![NamedEffect {
+                                    attribute: Some("attr".into()),
+                                    group: None,
+                                    delta: 0.0,
+                                    scaling: vec![],
+                                }],
+                                conditional: vec![],
+                                default_conditional: vec![],
+                            },
+                        });
+                        state.list_idx = state.outcomes.len() - 1;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        KeyCode::Char('d') | KeyCode::Char('D') => {
+            if let Some(ref mut state) = app.edit_decision_detail {
+                match state.active_field {
+                    EditField::Preconditions => {
+                        if !state.preconditions.is_empty()
+                            && state.list_idx < state.preconditions.len()
+                        {
+                            state.preconditions.remove(state.list_idx);
+                            if state.list_idx >= state.preconditions.len()
+                                && !state.preconditions.is_empty()
+                            {
+                                state.list_idx = state.preconditions.len() - 1;
+                            }
+                        }
+                    }
+                    EditField::CostEffects => {
+                        if !state.cost.is_empty()
+                            && state.list_idx < state.cost.len()
+                        {
+                            state.cost.remove(state.list_idx);
+                            if state.list_idx >= state.cost.len()
+                                && !state.cost.is_empty()
+                            {
+                                state.list_idx = state.cost.len() - 1;
+                            }
+                        }
+                    }
+                    EditField::Outcomes => {
+                        if state.sub_list_idx > 0 {
+                            // Delete sub-effect within outcome
+                            if let Some(outcome) =
+                                state.outcomes.get_mut(state.list_idx)
+                            {
+                                if let NamedTransform::Declarative { effects, .. } =
+                                    &mut outcome.transform
+                                {
+                                    let idx = state.sub_list_idx - 1;
+                                    if idx < effects.len() {
+                                        effects.remove(idx);
+                                        state.sub_list_idx = 0;
+                                    }
+                                }
+                            }
+                        } else if !state.outcomes.is_empty()
+                            && state.list_idx < state.outcomes.len()
+                        {
+                            state.outcomes.remove(state.list_idx);
+                            if state.list_idx >= state.outcomes.len()
+                                && !state.outcomes.is_empty()
+                            {
+                                state.list_idx = state.outcomes.len() - 1;
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        KeyCode::Char('e') | KeyCode::Char('E') => {
+            if let Some(ref mut state) = app.edit_decision_detail {
+                if state.active_field == EditField::Outcomes
+                    && !state.outcomes.is_empty()
+                    && state.list_idx < state.outcomes.len()
+                {
+                    // Toggle sub-edit mode
+                    if state.sub_list_idx == 0 {
+                        // Enter sub-list editing of outcome effects
+                        if let NamedTransform::Declarative { effects, .. } =
+                            &state.outcomes[state.list_idx].transform
+                        {
+                            if !effects.is_empty() {
+                                state.sub_list_idx = 1; // Start at first effect
+                            }
+                        }
+                    } else {
+                        state.sub_list_idx = 0; // Exit sub-list
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+// ── Edit passives list ──────────────────────────────────────────────────────────
+
+fn handle_edit_passives(app: &mut App, code: KeyCode) {
+    // Confirmation mode
+    if app.confirm_delete.is_some() {
+        match code {
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                let idx = app.edit_passive_idx;
+                app.delete_edit_passive(idx);
+                app.confirm_delete = None;
+            }
+            _ => {
+                app.confirm_delete = None;
+            }
+        }
+        return;
+    }
+
+    match code {
+        KeyCode::Char('q') | KeyCode::Char('Q') => std::process::exit(0),
+        KeyCode::Esc => {
+            app.screen = Screen::List;
+        }
+        KeyCode::Up | KeyCode::Char('k') => app.edit_passive_prev(),
+        KeyCode::Down | KeyCode::Char('j') => app.edit_passive_next(),
+        KeyCode::Enter => {
+            if !app.edit_passives.is_empty() {
+                app.open_passive_detail(app.edit_passive_idx);
+            }
+        }
+        KeyCode::Char('d') | KeyCode::Char('D') => {
+            if let Some(p) = app.edit_passives.get(app.edit_passive_idx) {
+                app.confirm_delete = Some(p.label.clone());
+            }
+        }
+        _ => {}
+    }
+}
+
+// ── Edit passive detail ─────────────────────────────────────────────────────────
+
+fn handle_edit_passive_detail(app: &mut App, code: KeyCode) {
+    match code {
+        KeyCode::Char('q') | KeyCode::Char('Q') => std::process::exit(0),
+        KeyCode::Esc => {
+            app.save_passive_edit();
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            if let Some(ref mut state) = app.edit_passive_detail {
+                if state.list_idx > 0 {
+                    state.list_idx -= 1;
+                }
+            }
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            if let Some(ref mut state) = app.edit_passive_detail {
+                if state.list_idx + 1 < state.effects.len() {
+                    state.list_idx += 1;
+                }
+            }
+        }
+        KeyCode::Char('a') | KeyCode::Char('A') => {
+            if let Some(ref mut state) = app.edit_passive_detail {
+                state.effects.push(NamedEffect {
+                    attribute: Some("attr".into()),
+                    group: None,
+                    delta: 0.0,
+                    scaling: vec![],
+                });
+                state.list_idx = state.effects.len() - 1;
+            }
+        }
+        KeyCode::Char('d') | KeyCode::Char('D') => {
+            if let Some(ref mut state) = app.edit_passive_detail {
+                if !state.effects.is_empty() && state.list_idx < state.effects.len() {
+                    state.effects.remove(state.list_idx);
+                    if state.list_idx >= state.effects.len() && !state.effects.is_empty() {
+                        state.list_idx = state.effects.len() - 1;
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+// ── Edit goals list ─────────────────────────────────────────────────────────────
+
+fn handle_edit_goals(app: &mut App, code: KeyCode) {
+    // Confirmation mode
+    if app.confirm_delete.is_some() {
+        match code {
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                let idx = app.edit_goal_idx;
+                app.delete_edit_goal(idx);
+                app.confirm_delete = None;
+            }
+            _ => {
+                app.confirm_delete = None;
+            }
+        }
+        return;
+    }
+
+    match code {
+        KeyCode::Char('q') | KeyCode::Char('Q') => std::process::exit(0),
+        KeyCode::Esc => {
+            app.screen = Screen::List;
+        }
+        KeyCode::Up | KeyCode::Char('k') => app.edit_goal_prev(),
+        KeyCode::Down | KeyCode::Char('j') => app.edit_goal_next(),
+        KeyCode::Enter => {
+            if !app.edit_goals.is_empty() {
+                app.open_goal_detail(app.edit_goal_idx);
+            }
+        }
+        KeyCode::Char('d') | KeyCode::Char('D') => {
+            if let Some((name, _)) = app.edit_goals.get(app.edit_goal_idx) {
+                app.confirm_delete = Some(name.clone());
+            }
+        }
+        _ => {}
+    }
+}
+
+// ── Edit goal detail ────────────────────────────────────────────────────────────
+
+fn handle_edit_goal_detail(app: &mut App, code: KeyCode) {
+    match code {
+        KeyCode::Char('q') | KeyCode::Char('Q') => std::process::exit(0),
+        KeyCode::Esc => {
+            app.save_goal_edit();
+        }
+        KeyCode::Tab => {
+            if let Some(ref mut state) = app.edit_goal_detail {
+                state.show_weights = !state.show_weights;
+                state.list_idx = 0;
+            }
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            if let Some(ref mut state) = app.edit_goal_detail {
+                if state.list_idx > 0 {
+                    state.list_idx -= 1;
+                }
+            }
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            if let Some(ref mut state) = app.edit_goal_detail {
+                let max = if state.show_weights {
+                    state.weights.len()
+                } else {
+                    state.cliffs.len()
+                };
+                if state.list_idx + 1 < max {
+                    state.list_idx += 1;
+                }
+            }
+        }
+        KeyCode::Char('a') | KeyCode::Char('A') => {
+            if let Some(ref mut state) = app.edit_goal_detail {
+                if state.show_weights {
+                    state.weights.push(("attr".into(), 0.0));
+                    state.list_idx = state.weights.len() - 1;
+                } else {
+                    state.cliffs.push((
+                        "attr".into(),
+                        loom_core::Threshold {
+                            min: 0.0,
+                            penalty: 1.0,
+                        },
+                    ));
+                    state.list_idx = state.cliffs.len() - 1;
+                }
+            }
+        }
+        KeyCode::Char('d') | KeyCode::Char('D') => {
+            if let Some(ref mut state) = app.edit_goal_detail {
+                if state.show_weights {
+                    if !state.weights.is_empty() && state.list_idx < state.weights.len() {
+                        state.weights.remove(state.list_idx);
+                        if state.list_idx >= state.weights.len() && !state.weights.is_empty() {
+                            state.list_idx = state.weights.len() - 1;
+                        }
+                    }
+                } else {
+                    if !state.cliffs.is_empty() && state.list_idx < state.cliffs.len() {
+                        state.cliffs.remove(state.list_idx);
+                        if state.list_idx >= state.cliffs.len() && !state.cliffs.is_empty() {
+                            state.list_idx = state.cliffs.len() - 1;
+                        }
+                    }
+                }
+            }
+        }
+        _ => {}
     }
 }

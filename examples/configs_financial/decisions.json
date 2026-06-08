@@ -1,0 +1,224 @@
+[
+  {
+    "id": "invest_index_fund",
+    "label": "Invest in index fund",
+    "preconditions": [
+      {"attribute": "cash", "operator": "Gt", "value": 10000},
+      {"attribute": "debt", "operator": "Lt", "value": 50000}
+    ],
+    "cost": [
+      {"attribute": "cash", "delta": -10000}
+    ],
+    "outcomes": [
+      {
+        "label": "Bull market",
+        "weight": 60,
+        "transform": {
+          "type": "declarative",
+          "effects": [
+            {"attribute": "stocks", "delta": 14000},
+            {"attribute": "risk_tolerance", "delta": 5}
+          ]
+        }
+      },
+      {
+        "label": "Bear market",
+        "weight": 30,
+        "transform": {
+          "type": "declarative",
+          "effects": [
+            {"attribute": "stocks", "delta": 7000},
+            {"attribute": "risk_tolerance", "delta": -5}
+          ]
+        }
+      },
+      {
+        "label": "Market crash",
+        "weight": 10,
+        "transform": {
+          "type": "declarative",
+          "effects": [
+            {"attribute": "stocks", "delta": 3000},
+            {"attribute": "risk_tolerance", "delta": -15}
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "id": "buy_rental_property",
+    "label": "Buy rental property",
+    "preconditions": [
+      {"attribute": "cash", "operator": "Gt", "value": 50000},
+      {"attribute": "credit_score", "operator": "Gte", "value": 680}
+    ],
+    "cost": [
+      {"attribute": "cash", "delta": -40000},
+      {"attribute": "debt", "delta": 150000}
+    ],
+    "outcomes": [
+      {
+        "label": "Great tenants",
+        "weight": 50,
+        "transform": {
+          "type": "declarative",
+          "effects": [
+            {"attribute": "real_estate", "delta": 20000},
+            {"attribute": "monthly_income", "delta": 2000}
+          ]
+        }
+      },
+      {
+        "label": "Mediocre tenants",
+        "weight": 30,
+        "transform": {
+          "type": "declarative",
+          "effects": [
+            {"attribute": "real_estate", "delta": 5000},
+            {"attribute": "monthly_income", "delta": 500}
+          ]
+        }
+      },
+      {
+        "label": "Vacancy nightmare",
+        "weight": 20,
+        "transform": {
+          "type": "declarative",
+          "effects": [
+            {"attribute": "real_estate", "delta": -10000},
+            {"attribute": "monthly_expenses", "delta": 500},
+            {"attribute": "credit_score", "delta": -20}
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "id": "pay_off_debt",
+    "label": "Pay off debt aggressively",
+    "preconditions": [
+      {"attribute": "debt", "operator": "Gt", "value": 5000},
+      {"attribute": "cash", "operator": "Gt", "value": 20000}
+    ],
+    "cost": [
+      {"attribute": "cash", "delta": -15000}
+    ],
+    "outcomes": [
+      {
+        "label": "Debt substantially reduced",
+        "weight": 80,
+        "transform": {
+          "type": "declarative",
+          "effects": [
+            {"attribute": "debt", "delta": -15000},
+            {"attribute": "credit_score", "delta": 25},
+            {"attribute": "monthly_expenses", "delta": -200}
+          ]
+        }
+      },
+      {
+        "label": "Missed opportunity cost",
+        "weight": 20,
+        "transform": {
+          "type": "declarative",
+          "effects": [
+            {"attribute": "debt", "delta": -12000},
+            {"attribute": "credit_score", "delta": 15}
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "id": "start_side_business",
+    "label": "Start a side business",
+    "preconditions": [
+      {"attribute": "cash", "operator": "Gt", "value": 15000},
+      {"attribute": "risk_tolerance", "operator": "Gte", "value": 40}
+    ],
+    "cost": [
+      {"attribute": "cash", "delta": -8000}
+    ],
+    "outcomes": [
+      {
+        "label": "Thriving business",
+        "weight": 20,
+        "transform": {
+          "type": "declarative",
+          "effects": [
+            {"attribute": "monthly_income", "delta": 3000},
+            {"attribute": "risk_tolerance", "delta": 10}
+          ]
+        }
+      },
+      {
+        "label": "Modest success",
+        "weight": 40,
+        "transform": {
+          "type": "declarative",
+          "effects": [
+            {"attribute": "monthly_income", "delta": 800},
+            {"attribute": "risk_tolerance", "delta": 3}
+          ]
+        }
+      },
+      {
+        "label": "Failed venture",
+        "weight": 40,
+        "transform": {
+          "type": "declarative",
+          "effects": [
+            {"attribute": "monthly_income", "delta": -200},
+            {"attribute": "risk_tolerance", "delta": -10},
+            {"attribute": "credit_score", "delta": -10}
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "id": "take_sabbatical",
+    "label": "Take a career sabbatical",
+    "preconditions": [
+      {"attribute": "cash", "operator": "Gt", "value": 30000},
+      {"attribute": "monthly_income", "operator": "Gt", "value": 4000}
+    ],
+    "cost": [],
+    "outcomes": [
+      {
+        "label": "Recharged and focused",
+        "weight": 50,
+        "transform": {
+          "type": "declarative",
+          "effects": [
+            {"attribute": "monthly_income", "delta": 2000},
+            {"attribute": "risk_tolerance", "delta": 10}
+          ]
+        }
+      },
+      {
+        "label": "Struggle to return",
+        "weight": 30,
+        "transform": {
+          "type": "declarative",
+          "effects": [
+            {"attribute": "monthly_income", "delta": -1000},
+            {"attribute": "cash", "delta": -10000}
+          ]
+        }
+      },
+      {
+        "label": "Permanent career shift",
+        "weight": 20,
+        "transform": {
+          "type": "declarative",
+          "effects": [
+            {"attribute": "monthly_income", "delta": -500},
+            {"attribute": "risk_tolerance", "delta": 15},
+            {"attribute": "retirement_savings", "delta": -5000}
+          ]
+        }
+      }
+    ]
+  }
+]

@@ -1,0 +1,44 @@
+[
+  {
+    "id": "salary",
+    "label": "Monthly salary deposit",
+    "frequency": {"type": "everystep"},
+    "effects": [
+      {"attribute": "cash", "delta": 5000}
+    ]
+  },
+  {
+    "id": "living_expenses",
+    "label": "Monthly living expenses",
+    "frequency": {"type": "everystep"},
+    "effects": [
+      {"attribute": "cash", "delta": -3000}
+    ]
+  },
+  {
+    "id": "debt_interest",
+    "label": "Debt interest accrual",
+    "frequency": {"type": "everystep"},
+    "effects": [
+      {"attribute": "debt", "delta": 150},
+      {"attribute": "cash", "delta": -200}
+    ]
+  },
+  {
+    "id": "stock_dividends",
+    "label": "Stock dividends",
+    "frequency": {"type": "everystep"},
+    "effects": [
+      {"attribute": "cash", "delta": 200}
+    ]
+  },
+  {
+    "id": "retirement_contribution",
+    "label": "Automatic retirement contribution",
+    "frequency": {"type": "everystep"},
+    "effects": [
+      {"attribute": "cash", "delta": -500},
+      {"attribute": "retirement_savings", "delta": 500}
+    ]
+  }
+]

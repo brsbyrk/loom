@@ -1,0 +1,18 @@
+{
+  "weights": {
+    "cash": 0.8,
+    "stocks": 0.6,
+    "bonds": 0.3,
+    "real_estate": 0.4,
+    "debt": -1.5,
+    "monthly_income": 0.6,
+    "monthly_expenses": -0.5,
+    "credit_score": 0.4,
+    "risk_tolerance": 0.2,
+    "retirement_savings": 0.7
+  },
+  "cliffs": {
+    "debt": {"min": 50000.0, "penalty": 1.5},
+    "cash": {"min": 1000.0, "penalty": 0.8}
+  }
+}
