@@ -6,9 +6,9 @@
 mod app;
 mod ui;
 
-use app::{App, EditField, Screen};
-use loom_core::{NamedCondition, NamedEffect, NamedOutcome, NamedTransform};
-use loom_store::Store;
+use app::{App, EditField, Screen, ScrollState, TimelineInputAction};
+use loom_core::{DynamicState, NamedCondition, NamedEffect, NamedOutcome, NamedTransform};
+use loom_store::{Store, TimelineStore};
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::DefaultTerminal;
 
@@ -17,8 +17,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let store = Store::open_default()?;
     let schema_list = store.list_schemas()?;
 
-    // ── App (start in schema browser) ───────────────────────────────────────────
+    // ── App (start in timeline browser) ─────────────────────────────────────────
     let mut app = App::new_browsing(store, schema_list);
+    app.load_timelines();
 
     // ── Terminal ─────────────────────────────────────────────────────────────────
     let mut terminal = ratatui::init();
@@ -37,6 +38,36 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App) -> Result<(), Box<dyn std:
             if key.kind == KeyEventKind::Release {
                 continue;
             }
+            // Global tab switching — 1=Timeline, 2=Explore, 3=Config
+            match key.code {
+                KeyCode::Char('1') => {
+                    app.tab = 0;
+                    app.load_timelines();
+                    app.screen = Screen::TimelineBrowser;
+                    continue;
+                }
+                KeyCode::Char('2') => {
+                    app.tab = 1;
+                    if app.schema_name.is_empty() && !app.schema_list.is_empty() {
+                        app.screen = Screen::SchemaList;
+                    } else if app.schema_name.is_empty() {
+                        app.screen = Screen::SchemaList;
+                    } else {
+                        app.screen = Screen::List;
+                    }
+                    continue;
+                }
+                KeyCode::Char('3') => {
+                    app.tab = 2;
+                    if app.schema_name.is_empty() {
+                        app.screen = Screen::SchemaList;
+                    } else {
+                        app.screen = Screen::EditDecisions;
+                    }
+                    continue;
+                }
+                _ => {}
+            }
             match app.screen.clone() {
                 Screen::SchemaList => handle_schema_list(app, key.code),
                 Screen::List => handle_list(app, key.code),
@@ -53,12 +84,16 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App) -> Result<(), Box<dyn std:
                 Screen::EditPassiveDetail => handle_edit_passive_detail(app, key.code),
                 Screen::EditGoals => handle_edit_goals(app, key.code),
                 Screen::EditGoalDetail => handle_edit_goal_detail(app, key.code),
+                Screen::TimelineBrowser => handle_timeline_browser(app, key.code),
+                Screen::SnapshotList => handle_snapshot_list(app, key.code),
+                Screen::SnapshotDetail => handle_snapshot_detail(app, key.code),
+                Screen::ForkBrowser => handle_fork_browser(app, key.code),
             }
         }
     }
 }
 
-// ── Screen handlers ─────────────────────────────────────────────────────────────
+// ── Schema list handler ────────────────────────────────────────────────────────
 
 fn handle_schema_list(app: &mut App, code: KeyCode) {
     match code {
@@ -92,6 +127,8 @@ fn handle_schema_list(app: &mut App, code: KeyCode) {
         _ => {}
     }
 }
+
+// ── Screen handlers ───────────────────────────────────────────────────────────
 
 fn handle_list(app: &mut App, code: KeyCode) {
     match code {
@@ -215,7 +252,7 @@ fn handle_state_manager(app: &mut App, code: KeyCode) {
     }
 }
 
-// ── Edit decisions list ─────────────────────────────────────────────────────────
+// ── Edit decisions list ───────────────────────────────────────────────────────
 
 fn handle_edit_decisions(app: &mut App, code: KeyCode) {
     // Confirmation mode
@@ -254,7 +291,7 @@ fn handle_edit_decisions(app: &mut App, code: KeyCode) {
     }
 }
 
-// ── Edit decision detail ────────────────────────────────────────────────────────
+// ── Edit decision detail ──────────────────────────────────────────────────────
 
 fn handle_edit_decision_detail(app: &mut App, code: KeyCode) {
     match code {
@@ -473,7 +510,7 @@ fn handle_edit_decision_detail(app: &mut App, code: KeyCode) {
     }
 }
 
-// ── Edit passives list ──────────────────────────────────────────────────────────
+// ── Edit passives list ────────────────────────────────────────────────────────
 
 fn handle_edit_passives(app: &mut App, code: KeyCode) {
     // Confirmation mode
@@ -512,7 +549,7 @@ fn handle_edit_passives(app: &mut App, code: KeyCode) {
     }
 }
 
-// ── Edit passive detail ─────────────────────────────────────────────────────────
+// ── Edit passive detail ───────────────────────────────────────────────────────
 
 fn handle_edit_passive_detail(app: &mut App, code: KeyCode) {
     match code {
@@ -559,7 +596,7 @@ fn handle_edit_passive_detail(app: &mut App, code: KeyCode) {
     }
 }
 
-// ── Edit goals list ─────────────────────────────────────────────────────────────
+// ── Edit goals list ───────────────────────────────────────────────────────────
 
 fn handle_edit_goals(app: &mut App, code: KeyCode) {
     // Confirmation mode
@@ -598,7 +635,7 @@ fn handle_edit_goals(app: &mut App, code: KeyCode) {
     }
 }
 
-// ── Edit goal detail ────────────────────────────────────────────────────────────
+// ── Edit goal detail ──────────────────────────────────────────────────────────
 
 fn handle_edit_goal_detail(app: &mut App, code: KeyCode) {
     match code {
@@ -664,6 +701,331 @@ fn handle_edit_goal_detail(app: &mut App, code: KeyCode) {
                             state.list_idx = state.cliffs.len() - 1;
                         }
                     }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Timeline screen handlers
+// ══════════════════════════════════════════════════════════════════════════════
+
+fn handle_timeline_browser(app: &mut App, code: KeyCode) {
+    // Handle input mode for creating timeline
+    if app.timeline_input_mode {
+        match app.timeline_input_action {
+            TimelineInputAction::CreateTimelineName => {
+                match code {
+                    KeyCode::Esc => {
+                        app.timeline_input_mode = false;
+                        app.input_buffer.clear();
+                        app.timeline_input_action = TimelineInputAction::None;
+                    }
+                    KeyCode::Enter => {
+                        let name = app.input_buffer.trim().to_string();
+                        if !name.is_empty() && !app.schema_list.is_empty() {
+                            // Next step: select schema
+                            app.timeline_input_action = TimelineInputAction::CreateTimelineSchema;
+                            app.input_prompt = "Select schema (↑↓ Enter):".into();
+                            app.create_timeline_schema_idx = 0;
+                        }
+                    }
+                    KeyCode::Char(c) => app.input_buffer.push(c),
+                    KeyCode::Backspace => { app.input_buffer.pop(); }
+                    _ => {}
+                }
+            }
+            TimelineInputAction::CreateTimelineSchema => {
+                match code {
+                    KeyCode::Esc => {
+                        app.timeline_input_mode = false;
+                        app.input_buffer.clear();
+                        app.timeline_input_action = TimelineInputAction::None;
+                    }
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        if app.create_timeline_schema_idx > 0 {
+                            app.create_timeline_schema_idx -= 1;
+                        }
+                    }
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        if app.create_timeline_schema_idx + 1 < app.schema_list.len() {
+                            app.create_timeline_schema_idx += 1;
+                        }
+                    }
+                    KeyCode::Enter => {
+                        if let Some(s) = app.schema_list.get(app.create_timeline_schema_idx) {
+                            let timeline_name = app.input_buffer.trim().to_string();
+                            app.create_timeline(&timeline_name, s.id);
+                            app.timeline_input_mode = false;
+                            app.input_buffer.clear();
+                            app.timeline_input_action = TimelineInputAction::None;
+                            // Refresh and select the new timeline
+                            app.load_timelines();
+                            if let Some(idx) = app.timelines.iter().position(|t| t.name == timeline_name) {
+                                app.timeline_idx = idx;
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+        return;
+    }
+
+    // Confirmation mode
+    if app.confirm_delete.is_some() {
+        match code {
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                if let Some(tl) = app.timelines.get(app.timeline_idx) {
+                    let ts = TimelineStore::new(&app.store.conn);
+                    let _ = ts.delete_timeline(tl.id);
+                    app.load_timelines();
+                    if app.timeline_idx >= app.timelines.len() && !app.timelines.is_empty() {
+                        app.timeline_idx = app.timelines.len() - 1;
+                    }
+                }
+                app.confirm_delete = None;
+            }
+            _ => {
+                app.confirm_delete = None;
+            }
+        }
+        return;
+    }
+
+    match code {
+        KeyCode::Char('q') | KeyCode::Char('Q') => std::process::exit(0),
+        KeyCode::Up | KeyCode::Char('k') => {
+            if !app.timelines.is_empty() {
+                app.timeline_idx = app.timeline_idx
+                    .checked_sub(1)
+                    .unwrap_or(app.timelines.len() - 1);
+            }
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            if !app.timelines.is_empty() {
+                app.timeline_idx = (app.timeline_idx + 1) % app.timelines.len();
+            }
+        }
+        KeyCode::Enter => {
+            if !app.timelines.is_empty() {
+                app.open_timeline(app.timeline_idx);
+            }
+        }
+        KeyCode::Char('n') | KeyCode::Char('N') => {
+            if app.schema_list.is_empty() {
+                app.screen = Screen::Error("No schemas exist. Run `cargo run --example seed -p loom-store` first.".into());
+            } else {
+                app.timeline_input_mode = true;
+                app.input_buffer.clear();
+                app.input_prompt = "Enter timeline name:".into();
+                app.timeline_input_action = TimelineInputAction::CreateTimelineName;
+            }
+        }
+        KeyCode::Char('d') | KeyCode::Char('D') => {
+            if let Some(tl) = app.timelines.get(app.timeline_idx) {
+                app.confirm_delete = Some(tl.name.clone());
+            }
+        }
+        _ => {}
+    }
+}
+
+fn handle_snapshot_list(app: &mut App, code: KeyCode) {
+    // Handle input mode
+    if app.timeline_input_mode {
+        match app.timeline_input_action {
+            TimelineInputAction::AppendSnapshotEntry => {
+                match code {
+                    KeyCode::Esc => {
+                        app.timeline_input_mode = false;
+                        app.input_buffer.clear();
+                        app.timeline_input_action = TimelineInputAction::None;
+                    }
+                    KeyCode::Enter => {
+                        let entry = app.input_buffer.trim().to_string();
+                        app.append_snapshot_to_timeline(&entry);
+                        app.timeline_input_mode = false;
+                        app.input_buffer.clear();
+                        app.timeline_input_action = TimelineInputAction::None;
+                    }
+                    KeyCode::Char(c) => app.input_buffer.push(c),
+                    KeyCode::Backspace => { app.input_buffer.pop(); }
+                    _ => {}
+                }
+            }
+            TimelineInputAction::ForkName => {
+                match code {
+                    KeyCode::Esc => {
+                        app.timeline_input_mode = false;
+                        app.input_buffer.clear();
+                        app.timeline_input_action = TimelineInputAction::None;
+                    }
+                    KeyCode::Enter => {
+                        let name = app.input_buffer.trim().to_string();
+                        app.timeline_input_action = TimelineInputAction::ForkLabel;
+                        app.input_buffer.clear();
+                        app.input_prompt = "Enter fork label:".into();
+                    }
+                    KeyCode::Char(c) => app.input_buffer.push(c),
+                    KeyCode::Backspace => { app.input_buffer.pop(); }
+                    _ => {}
+                }
+            }
+            TimelineInputAction::ForkLabel => {
+                match code {
+                    KeyCode::Esc => {
+                        app.timeline_input_mode = false;
+                        app.input_buffer.clear();
+                        app.timeline_input_action = TimelineInputAction::None;
+                    }
+                    KeyCode::Enter => {
+                        let label = app.input_buffer.trim().to_string();
+                        let name = app.timelines.get(app.timeline_idx)
+                            .map(|t| format!("{} (fork)", t.name))
+                            .unwrap_or_else(|| "fork".into());
+                        app.fork_timeline(&name, &label);
+                        app.timeline_input_mode = false;
+                        app.input_buffer.clear();
+                        app.timeline_input_action = TimelineInputAction::None;
+                    }
+                    KeyCode::Char(c) => app.input_buffer.push(c),
+                    KeyCode::Backspace => { app.input_buffer.pop(); }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+        return;
+    }
+
+    match code {
+        KeyCode::Char('q') | KeyCode::Char('Q') => std::process::exit(0),
+        KeyCode::Esc => {
+            app.screen = Screen::TimelineBrowser;
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            if !app.snapshots.is_empty() {
+                app.snapshot_idx = app.snapshot_idx
+                    .checked_sub(1)
+                    .unwrap_or(app.snapshots.len() - 1);
+            }
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            if !app.snapshots.is_empty() {
+                app.snapshot_idx = (app.snapshot_idx + 1) % app.snapshots.len();
+            }
+        }
+        KeyCode::Enter => {
+            if !app.snapshots.is_empty() {
+                app.screen = Screen::SnapshotDetail;
+                app.scroll = ScrollState::default();
+            }
+        }
+        KeyCode::Char('a') | KeyCode::Char('A') => {
+            app.timeline_input_mode = true;
+            app.input_buffer.clear();
+            app.input_prompt = "Entry text for new snapshot:".into();
+            app.timeline_input_action = TimelineInputAction::AppendSnapshotEntry;
+        }
+        KeyCode::Char('f') | KeyCode::Char('F') => {
+            if !app.snapshots.is_empty() {
+                app.timeline_input_mode = true;
+                app.input_buffer.clear();
+                app.input_prompt = "Enter fork timeline name:".into();
+                app.timeline_input_action = TimelineInputAction::ForkName;
+            }
+        }
+        KeyCode::Char('b') | KeyCode::Char('B') => {
+            if !app.forks.is_empty() {
+                app.screen = Screen::ForkBrowser;
+                app.fork_idx = 0;
+            }
+        }
+        KeyCode::Char('r') | KeyCode::Char('R') => {
+            // Run simulation from current snapshot's state
+            if !app.snapshots.is_empty() {
+                let snap = &app.snapshots[app.snapshot_idx];
+                let values: Vec<f64> = serde_json::from_str(&snap.attributes_json).unwrap_or_default();
+                let schema = app.schema.clone();
+                app.current_state = DynamicState::from_vec(values, schema);
+                app.screen = Screen::List;
+            }
+        }
+        _ => {}
+    }
+}
+
+fn handle_snapshot_detail(app: &mut App, code: KeyCode) {
+    match code {
+        KeyCode::Char('q') | KeyCode::Char('Q') => std::process::exit(0),
+        KeyCode::Esc => {
+            app.screen = Screen::SnapshotList;
+            app.scroll.offset = 0;
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            if app.scroll.offset > 0 {
+                app.scroll.offset -= 1;
+            }
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            app.scroll.offset += 1;
+        }
+        KeyCode::Char('r') | KeyCode::Char('R') => {
+            // Run simulation from this snapshot
+            if let Some(snap) = app.snapshots.get(app.snapshot_idx) {
+                let values: Vec<f64> = serde_json::from_str(&snap.attributes_json).unwrap_or_default();
+                let schema = app.schema.clone();
+                app.current_state = DynamicState::from_vec(values, schema);
+                app.screen = Screen::List;
+            }
+        }
+        KeyCode::Char('u') | KeyCode::Char('U') => {
+            // Resolve outcome
+            app.timeline_input_mode = true;
+            app.input_buffer.clear();
+            app.input_prompt = "Enter actual outcome deltas JSON:".into();
+            app.timeline_input_action = TimelineInputAction::ResolveOutcome;
+        }
+        _ => {}
+    }
+}
+
+fn handle_fork_browser(app: &mut App, code: KeyCode) {
+    // Handle input mode if needed (inherit from snapshot list's input handling)
+    // For now, just navigation
+    match code {
+        KeyCode::Char('q') | KeyCode::Char('Q') => std::process::exit(0),
+        KeyCode::Esc => {
+            if let Some(id) = app.active_timeline_id {
+                app.load_snapshots(id);
+            }
+            app.screen = Screen::SnapshotList;
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            if !app.forks.is_empty() {
+                app.fork_idx = app.fork_idx
+                    .checked_sub(1)
+                    .unwrap_or(app.forks.len() - 1);
+            }
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            if !app.forks.is_empty() {
+                app.fork_idx = (app.fork_idx + 1) % app.forks.len();
+            }
+        }
+        KeyCode::Enter => {
+            // Open child timeline
+            if let Some(fork) = app.forks.get(app.fork_idx) {
+                let child_id = fork.child_timeline_id;
+                // Find the child in timelines list
+                if let Some(idx) = app.timelines.iter().position(|t| t.id == child_id) {
+                    app.timeline_idx = idx;
+                    app.open_timeline(idx);
                 }
             }
         }

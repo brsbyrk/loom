@@ -5,7 +5,7 @@ use loom_core::{
     NamedDecision, NamedEffect, NamedGoalVector, NamedOutcome, NamedPassiveEffect, PassiveEffect,
     Simulation,
 };
-use loom_store::{SchemaSummary, Store};
+use loom_store::{ForkRow, SchemaSummary, SnapshotRow, Store, TimelineStore, TimelineSummary};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -36,6 +36,14 @@ pub enum Screen {
     EditGoals,
     /// Edit a single goal's weights/cliffs.
     EditGoalDetail,
+    /// Timeline browser — list all timelines.
+    TimelineBrowser,
+    /// Snapshot list for a timeline.
+    SnapshotList,
+    /// Detail view of a single snapshot.
+    SnapshotDetail,
+    /// Fork browser — list forks for a timeline.
+    ForkBrowser,
 }
 
 /// Scroll state for scrollable content.
@@ -180,6 +188,50 @@ pub struct App {
     pub edit_goals: Vec<(String, NamedGoalVector)>,
     pub edit_goal_idx: usize,
     pub edit_goal_detail: Option<GoalEditState>,
+
+    // ── Timeline state ──────────────────────────────────────────────────────────
+    /// Tab: 0=Timeline, 1=Explore, 2=Config
+    pub tab: usize,
+    /// All timelines (cached).
+    pub timelines: Vec<TimelineSummary>,
+    /// Active timeline ID (for snapshot list view).
+    pub active_timeline_id: Option<i64>,
+    /// Active timeline name.
+    pub active_timeline_name: String,
+    /// Active timeline schema name (resolved).
+    pub active_timeline_schema_name: String,
+    /// Snapshots for the active timeline.
+    pub snapshots: Vec<SnapshotRow>,
+    /// Forks for the active timeline.
+    pub forks: Vec<ForkRow>,
+    /// Index into timelines list.
+    pub timeline_idx: usize,
+    /// Index into snapshots list.
+    pub snapshot_idx: usize,
+    /// Index into forks list.
+    pub fork_idx: usize,
+    /// Input buffer for timeline/snapshot creation prompts.
+    pub input_buffer: String,
+    /// Prompt label when in input mode.
+    pub input_prompt: String,
+    /// Are we in timeline input mode (create timeline, append snapshot, etc.)?
+    pub timeline_input_mode: bool,
+    /// Current action context for timeline_input_mode.
+    pub timeline_input_action: TimelineInputAction,
+    /// Selected schema index for create-timeline flow.
+    pub create_timeline_schema_idx: usize,
+}
+
+/// What the timeline input prompt is asking for.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TimelineInputAction {
+    None,
+    CreateTimelineName,
+    CreateTimelineSchema,
+    AppendSnapshotEntry,
+    ForkName,
+    ForkLabel,
+    ResolveOutcome,
 }
 
 /// Simulation parameters.
@@ -218,8 +270,8 @@ impl App {
             current_state: DynamicState::from_vec(vec![], empty_schema.clone()),
             schema_list,
             schema_idx: 0,
-            screen: Screen::SchemaList,
-            prev_screen: Screen::SchemaList,
+            screen: Screen::TimelineBrowser,
+            prev_screen: Screen::TimelineBrowser,
             selected_idx: 0,
             state_idx: 0,
             scroll: ScrollState::default(),
@@ -241,6 +293,21 @@ impl App {
             edit_goals: Vec::new(),
             edit_goal_idx: 0,
             edit_goal_detail: None,
+            tab: 0,
+            timelines: Vec::new(),
+            active_timeline_id: None,
+            active_timeline_name: String::new(),
+            active_timeline_schema_name: String::new(),
+            snapshots: Vec::new(),
+            forks: Vec::new(),
+            timeline_idx: 0,
+            snapshot_idx: 0,
+            fork_idx: 0,
+            input_buffer: String::new(),
+            input_prompt: String::new(),
+            timeline_input_mode: false,
+            timeline_input_action: TimelineInputAction::None,
+            create_timeline_schema_idx: 0,
         }
     }
 
@@ -467,15 +534,126 @@ impl App {
 
     /// Push a character into the current input buffer.
     pub fn input_char(&mut self, c: char) {
-        if self.input_mode {
+        if self.timeline_input_mode {
+            self.input_buffer.push(c);
+        } else if self.input_mode {
             self.save_name.push(c);
         }
     }
 
     /// Backspace in the current input buffer.
     pub fn input_backspace(&mut self) {
-        if self.input_mode {
+        if self.timeline_input_mode {
+            self.input_buffer.pop();
+        } else if self.input_mode {
             self.save_name.pop();
+        }
+    }
+
+    // ── Timeline methods ───────────────────────────────────────────────────────
+
+    /// Load all timelines from the store.
+    pub fn load_timelines(&mut self) {
+        let ts = TimelineStore::new(&self.store.conn);
+        self.timelines = ts.list_timelines().unwrap_or_default();
+    }
+
+    /// Load snapshots for a timeline.
+    pub fn load_snapshots(&mut self, timeline_id: i64) {
+        let ts = TimelineStore::new(&self.store.conn);
+        self.snapshots = ts.list_snapshots(timeline_id).unwrap_or_default();
+    }
+
+    /// Load forks for a timeline.
+    pub fn load_forks(&mut self, timeline_id: i64) {
+        let ts = TimelineStore::new(&self.store.conn);
+        self.forks = ts.list_forks(timeline_id).unwrap_or_default();
+    }
+
+    /// Create a new timeline and load it.
+    pub fn create_timeline(&mut self, name: &str, schema_id: i64) -> i64 {
+        let ts = TimelineStore::new(&self.store.conn);
+        let id = ts.create_timeline(name, schema_id).unwrap_or(0);
+        self.load_timelines();
+        id
+    }
+
+    /// Append a snapshot to the active timeline using current state values.
+    pub fn append_snapshot_to_timeline(&mut self, entry_text: &str) -> i64 {
+        let timeline_id = match self.active_timeline_id {
+            Some(id) => id,
+            None => return 0,
+        };
+        let values = self.current_state.as_slice().to_vec();
+        let parent_id = self.snapshots.last().map(|s| s.id);
+        let ts = TimelineStore::new(&self.store.conn);
+        let id = ts.append_snapshot(timeline_id, parent_id, entry_text, &values).unwrap_or(0);
+        self.load_snapshots(timeline_id);
+        self.snapshot_idx = self.snapshots.len().saturating_sub(1);
+        id
+    }
+
+    /// Fork the active timeline at the selected snapshot.
+    pub fn fork_timeline(&mut self, name: &str, label: &str) -> i64 {
+        let timeline_id = match self.active_timeline_id {
+            Some(id) => id,
+            None => return 0,
+        };
+        let snapshot_id = match self.snapshots.get(self.snapshot_idx) {
+            Some(s) => s.id,
+            None => return 0,
+        };
+        let ts = TimelineStore::new(&self.store.conn);
+        let child_id = ts.fork_timeline(timeline_id, snapshot_id, name, label).unwrap_or(0);
+        self.load_forks(timeline_id);
+        child_id
+    }
+
+    /// Resolve a snapshot's actual outcome.
+    pub fn resolve_snapshot(&mut self, actual_deltas_json: &str) {
+        let snapshot_id = match self.snapshots.get(self.snapshot_idx) {
+            Some(s) => s.id,
+            None => return,
+        };
+        let ts = TimelineStore::new(&self.store.conn);
+        let _ = ts.resolve_outcome(snapshot_id, actual_deltas_json);
+        if let Some(tid) = self.active_timeline_id {
+            self.load_snapshots(tid);
+        }
+    }
+
+    pub fn open_timeline(&mut self, idx: usize) {
+        if let Some(tl) = self.timelines.get(idx).cloned() {
+            self.active_timeline_id = Some(tl.id);
+            self.active_timeline_name = tl.name.clone();
+            // Resolve schema name
+            let schema_name = self
+                .schema_list
+                .iter()
+                .find(|s| s.id == tl.schema_id)
+                .map(|s| s.name.clone())
+                .unwrap_or_else(|| format!("schema#{}", tl.schema_id));
+            self.active_timeline_schema_name = schema_name.clone();
+            self.load_snapshots(tl.id);
+            self.load_forks(tl.id);
+            self.snapshot_idx = 0;
+            self.fork_idx = 0;
+            self.screen = Screen::SnapshotList;
+            self.scroll = ScrollState::default();
+
+            // Also load schema data for this timeline
+            if let Err(e) = self.load_schema(&schema_name) {
+                eprintln!("Failed to load schema for timeline: {e}");
+            } else {
+                // Restore the last snapshot's state if there are snapshots
+                if !self.snapshots.is_empty() {
+                    let last = &self.snapshots[self.snapshots.len() - 1];
+                    let values: Vec<f64> = serde_json::from_str(&last.attributes_json).unwrap_or_default();
+                    self.current_state = DynamicState::from_vec(values, self.schema.clone());
+                } else {
+                    self.init_default_state();
+                }
+            }
         }
     }
 

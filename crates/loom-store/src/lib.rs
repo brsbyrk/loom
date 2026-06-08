@@ -7,13 +7,20 @@
 //! - `passives` — per-schema recurring effects
 //! - `goals` — per-schema goal vectors
 //! - `states` — saved simulation state snapshots
+//! - `timelines` — named timelines (git-for-life snapshots)
+//! - `snapshots` — ordered attribute-value snapshots with journal entries
+//! - `forks` — timeline fork records
 //!
 //! # Architecture
 //!
 //! The store returns `Named*` types from `loom-core`. Consumers resolve them to engine
 //! types via `resolve(&schema)`. The engine never touches the database.
 //!
-//! Database location: `~/.loom/loom.db` (unified — schemas + states in one file).
+//! Database location: `~/.loom/loom.db` (unified — schemas + states + timelines in one file).
+
+pub mod timeline;
+
+pub use timeline::{ForkRow, SnapshotRow, TimelineRow, TimelineStore, TimelineSummary};
 
 use loom_core::{
     AttributeSchema, NamedCondition, NamedDecision, NamedEffect, NamedFrequency,
@@ -31,7 +38,7 @@ const DB_PATH: &str = ".loom/loom.db";
 // ── Store ──────────────────────────────────────────────────────────────────────────
 
 pub struct Store {
-    conn: Connection,
+    pub conn: Connection,
 }
 
 impl Store {
@@ -100,6 +107,36 @@ impl Store {
                 note TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 state_json TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS timelines (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                schema_id INTEGER NOT NULL REFERENCES schemas(id),
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timeline_id INTEGER NOT NULL REFERENCES timelines(id) ON DELETE CASCADE,
+                parent_id INTEGER REFERENCES snapshots(id),
+                step INTEGER NOT NULL,
+                attributes_json TEXT NOT NULL,
+                entry_text TEXT NOT NULL DEFAULT '',
+                decision_id INTEGER,
+                decision_chosen_outcome TEXT,
+                forecast_json TEXT,
+                actual_outcome_json TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS forks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                parent_timeline_id INTEGER NOT NULL REFERENCES timelines(id),
+                fork_snapshot_id INTEGER NOT NULL REFERENCES snapshots(id),
+                child_timeline_id INTEGER NOT NULL REFERENCES timelines(id),
+                label TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
             );",
         )?;
         Ok(())

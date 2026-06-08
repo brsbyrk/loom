@@ -1,7 +1,6 @@
 //! Rendering functions for the Loom TUI.
 
-use crate::app::{EditField, Screen};
-use crate::app::App;
+use crate::app::{App, EditField, Screen};
 use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
@@ -22,6 +21,9 @@ const YELLOW: Color = Color::Rgb(255, 220, 80);
 // ── Entry point ──────────────────────────────────────────────────────────────────────
 
 pub fn render(f: &mut Frame, app: &App) {
+    // Draw top tab bar for all screens except SchemaList
+    draw_tab_bar(f, app);
+
     match &app.screen {
         Screen::SchemaList => render_schema_list(f, app),
         Screen::List => render_list(f, app),
@@ -35,16 +37,65 @@ pub fn render(f: &mut Frame, app: &App) {
         Screen::EditPassiveDetail => render_edit_passive_detail(f, app),
         Screen::EditGoals => render_edit_goals(f, app),
         Screen::EditGoalDetail => render_edit_goal_detail(f, app),
+        Screen::TimelineBrowser => render_timeline_browser(f, app),
+        Screen::SnapshotList => render_snapshot_list(f, app),
+        Screen::SnapshotDetail => render_snapshot_detail(f, app),
+        Screen::ForkBrowser => render_fork_browser(f, app),
     }
+}
+
+// ── Top tab bar ──────────────────────────────────────────────────────────────────────
+
+fn draw_tab_bar(f: &mut Frame, app: &App) {
+    let area = f.area();
+    // Reserve 1 line at top for tab bar
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(0)])
+        .split(area);
+    f.render_widget(ratatui::widgets::Clear, chunks[0]);
+
+    let tab_names = ["Timeline", "Explore", "Config"];
+    let spans: Vec<Span> = tab_names.iter().enumerate().map(|(i, name)| {
+        let is_active = i == app.tab;
+        let tab_style = if is_active {
+            Style::default().fg(ACCENT).bold()
+        } else {
+            Style::default().fg(DIM)
+        };
+        let label = if is_active {
+            format!(" [{name}] ")
+        } else {
+            format!("  {name}  ")
+        };
+        Span::styled(label, tab_style)
+    }).collect();
+
+    let bar = Paragraph::new(Line::from(spans))
+        .style(Style::default().bg(HEADER_BG));
+    f.render_widget(bar, chunks[0]);
+
+    // Adjust f.area() for subsequent rendering
+    let _inner = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(0)])
+        .split(area);
+    // We don't consume the area; each render function will layout its own area.
+    // We just use the full area minus the top line by using a modified approach.
+    // Actually, we'll let each render function use the full area and they'll handle
+    // their own layout. We'll leave chunks[0] drawn behind and continue.
+    _ = f.area(); // reference to ensure f is used
 }
 
 // ── Schema list screen ───────────────────────────────────────────────────────────────
 
 fn render_schema_list(f: &mut Frame, app: &App) {
+    // Account for tab bar: shift content down by 1
+    let area = f.area();
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(0), Constraint::Length(1)])
-        .split(f.area());
+        .constraints([Constraint::Length(1), Constraint::Min(0), Constraint::Length(1)])
+        .split(area);
 
     let mut lines: Vec<Line> = Vec::new();
     lines.push(Line::from(Span::styled(
@@ -93,7 +144,7 @@ fn render_schema_list(f: &mut Frame, app: &App) {
         )
         .wrap(Wrap { trim: false });
 
-    f.render_widget(block, chunks[0]);
+    f.render_widget(block, chunks[1]);
 
     let footer = if app.schema_list.is_empty() {
         Paragraph::new(Line::from(vec![
@@ -113,7 +164,7 @@ fn render_schema_list(f: &mut Frame, app: &App) {
         ]))
     }
     .style(Style::default().bg(HEADER_BG));
-    f.render_widget(footer, chunks[1]);
+    f.render_widget(footer, chunks[2]);
 }
 
 // ── List screen ──────────────────────────────────────────────────────────────────────
@@ -1272,6 +1323,581 @@ fn render_edit_goal_detail(f: &mut Frame, app: &App) {
         Span::raw("weights/cliffs  "),
         Span::styled(" Esc ", Style::default().fg(ACCENT).bold()),
         Span::raw("save & back  "),
+        Span::styled(" Q ", Style::default().fg(ACCENT).bold()),
+        Span::raw("quit"),
+    ]))
+    .style(Style::default().bg(HEADER_BG));
+    f.render_widget(footer, chunks[1]);
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Timeline screen renderers
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ── Timeline Browser ────────────────────────────────────────────────────────────────
+
+fn render_timeline_browser(f: &mut Frame, app: &App) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0), Constraint::Length(1)])
+        .split(f.area());
+
+    let mut lines: Vec<Line> = Vec::new();
+
+    // Header
+    if app.timeline_input_mode {
+        match app.timeline_input_action {
+            crate::app::TimelineInputAction::CreateTimelineName => {
+                lines.push(Line::from(Span::styled(
+                    format!(" {} ", app.input_prompt),
+                    Style::default().fg(ACCENT).bold(),
+                )));
+                lines.push(Line::from(Span::styled(
+                    format!(" > {}▌", app.input_buffer),
+                    Style::default().fg(Color::White).bold(),
+                )));
+                lines.push(Line::from(Span::styled(
+                    " Enter to confirm, Esc to cancel",
+                    Style::default().fg(DIM),
+                )));
+            }
+            crate::app::TimelineInputAction::CreateTimelineSchema => {
+                lines.push(Line::from(Span::styled(
+                    format!(" Create timeline \"{}\" — select schema:", app.input_buffer),
+                    Style::default().fg(ACCENT).bold(),
+                )));
+                lines.push(Line::raw(""));
+                for (i, s) in app.schema_list.iter().enumerate() {
+                    let cursor = if i == app.create_timeline_schema_idx { " > " } else { "   " };
+                    let style = if i == app.create_timeline_schema_idx {
+                        Style::default().fg(ACCENT).bold()
+                    } else {
+                        Style::default().fg(Color::White)
+                    };
+                    lines.push(Line::from(vec![
+                        Span::styled(cursor, style),
+                        Span::styled(format!("{:<20}", s.name), style),
+                        Span::styled(
+                            format!("({} attributes)", s.attribute_count),
+                            Style::default().fg(DIM),
+                        ),
+                    ]));
+                }
+                lines.push(Line::raw(""));
+                lines.push(Line::from(Span::styled(
+                    " ↑↓ navigate, Enter confirm, Esc cancel",
+                    Style::default().fg(DIM),
+                )));
+            }
+            _ => {}
+        }
+    } else if app.confirm_delete.is_some() {
+        lines.push(Line::from(Span::styled(
+            format!(" Delete timeline \"{}\"? (y/n)", app.confirm_delete.as_ref().unwrap()),
+            Style::default().fg(BAD).bold(),
+        )));
+    } else {
+        lines.push(Line::from(Span::styled(
+            " Timeline Browser ",
+            Style::default().fg(ACCENT).bold(),
+        )));
+        lines.push(Line::raw(""));
+
+        if app.timelines.is_empty() {
+            lines.push(Line::from(Span::styled(
+                " No timelines yet.",
+                Style::default().fg(DIM),
+            )));
+            lines.push(Line::from(Span::styled(
+                " Press N to create a new timeline.",
+                Style::default().fg(DIM),
+            )));
+        } else {
+            lines.push(Line::from(Span::styled(
+                format!(" {} timelines:", app.timelines.len()),
+                Style::default().fg(DIM),
+            )));
+            for (i, tl) in app.timelines.iter().enumerate() {
+                let cursor = if i == app.timeline_idx { " > " } else { "   " };
+                let style = if i == app.timeline_idx {
+                    Style::default().fg(ACCENT).bold()
+                } else {
+                    Style::default().fg(Color::White)
+                };
+                // Resolve schema name
+                let schema_name = app.schema_list
+                    .iter()
+                    .find(|s| s.id == tl.schema_id)
+                    .map(|s| s.name.as_str())
+                    .unwrap_or("?");
+                lines.push(Line::from(vec![
+                    Span::styled(cursor, style),
+                    Span::styled(format!("{:<24}", tl.name), style),
+                    Span::styled(
+                        format!("(schema: {:<12}, {} snapshots) ", schema_name, tl.snapshot_count),
+                        Style::default().fg(DIM),
+                    ),
+                    Span::styled(
+                        &tl.created_at,
+                        Style::default().fg(DIM),
+                    ),
+                ]));
+            }
+        }
+    }
+
+    let block = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .title(" Timeline Browser ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(ACCENT)),
+        )
+        .wrap(Wrap { trim: false });
+
+    f.render_widget(block, chunks[0]);
+
+    let footer = if app.timeline_input_mode || app.confirm_delete.is_some() {
+        Paragraph::new(Line::from(vec![
+            Span::styled(" Esc ", Style::default().fg(ACCENT).bold()),
+            Span::raw("cancel  "),
+            Span::styled(" Enter ", Style::default().fg(ACCENT).bold()),
+            Span::raw("confirm"),
+        ]))
+        .style(Style::default().bg(HEADER_BG))
+    } else {
+        Paragraph::new(Line::from(vec![
+            Span::styled(" ↑↓ ", Style::default().fg(ACCENT).bold()),
+            Span::raw("navigate  "),
+            Span::styled(" Enter ", Style::default().fg(ACCENT).bold()),
+            Span::raw("open  "),
+            Span::styled(" N ", Style::default().fg(ACCENT).bold()),
+            Span::raw("new  "),
+            Span::styled(" D ", Style::default().fg(ACCENT).bold()),
+            Span::raw("delete  "),
+            Span::styled(" Q ", Style::default().fg(ACCENT).bold()),
+            Span::raw("quit"),
+        ]))
+        .style(Style::default().bg(HEADER_BG))
+    };
+    f.render_widget(footer, chunks[1]);
+}
+
+// ── Snapshot List ───────────────────────────────────────────────────────────────────
+
+fn render_snapshot_list(f: &mut Frame, app: &App) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0), Constraint::Length(1)])
+        .split(f.area());
+
+    let mut lines: Vec<Line> = Vec::new();
+
+    // Header
+    if app.timeline_input_mode {
+        match app.timeline_input_action {
+            crate::app::TimelineInputAction::AppendSnapshotEntry => {
+                lines.push(Line::from(Span::styled(
+                    format!(" {} ", app.input_prompt),
+                    Style::default().fg(ACCENT).bold(),
+                )));
+                lines.push(Line::from(Span::styled(
+                    format!(" > {}▌", app.input_buffer),
+                    Style::default().fg(Color::White).bold(),
+                )));
+                lines.push(Line::from(Span::styled(
+                    " Enter to confirm, Esc to cancel",
+                    Style::default().fg(DIM),
+                )));
+            }
+            crate::app::TimelineInputAction::ForkName => {
+                lines.push(Line::from(Span::styled(
+                    format!(" {} ", app.input_prompt),
+                    Style::default().fg(ACCENT).bold(),
+                )));
+                lines.push(Line::from(Span::styled(
+                    format!(" > {}▌", app.input_buffer),
+                    Style::default().fg(Color::White).bold(),
+                )));
+                lines.push(Line::from(Span::styled(
+                    " Enter to continue, Esc to cancel",
+                    Style::default().fg(DIM),
+                )));
+            }
+            crate::app::TimelineInputAction::ForkLabel => {
+                lines.push(Line::from(Span::styled(
+                    format!(" {} ", app.input_prompt),
+                    Style::default().fg(ACCENT).bold(),
+                )));
+                lines.push(Line::from(Span::styled(
+                    format!(" > {}▌", app.input_buffer),
+                    Style::default().fg(Color::White).bold(),
+                )));
+                lines.push(Line::from(Span::styled(
+                    " Enter to fork, Esc to cancel",
+                    Style::default().fg(DIM),
+                )));
+            }
+            _ => {}
+        }
+    } else {
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!(" Timeline: {} ", app.active_timeline_name),
+                Style::default().fg(ACCENT).bold(),
+            ),
+            Span::styled(
+                format!(" ({})", app.active_timeline_schema_name),
+                Style::default().fg(DIM),
+            ),
+        ]));
+        lines.push(Line::raw(""));
+
+        if app.snapshots.is_empty() {
+            lines.push(Line::from(Span::styled(
+                " No snapshots yet.",
+                Style::default().fg(DIM),
+            )));
+            lines.push(Line::from(Span::styled(
+                " Press A to append a snapshot using the current state.",
+                Style::default().fg(DIM),
+            )));
+        } else {
+            lines.push(Line::from(Span::styled(
+                format!(" {} snapshots:", app.snapshots.len()),
+                Style::default().fg(DIM),
+            )));
+            lines.push(Line::raw(""));
+
+            for (i, snap) in app.snapshots.iter().enumerate() {
+                let is_head = i == app.snapshots.len() - 1;
+                let cursor = if i == app.snapshot_idx { " > " } else { "   " };
+                let style = if i == app.snapshot_idx {
+                    Style::default().fg(ACCENT).bold()
+                } else {
+                    Style::default().fg(Color::White)
+                };
+
+                // Show first few attribute values
+                let values: Vec<f64> = serde_json::from_str(&snap.attributes_json).unwrap_or_default();
+                let preview: String = values.iter().take(3).map(|v| format!("{v:.0}")).collect::<Vec<_>>().join(", ");
+
+                let head_marker = if is_head { " ◄ HEAD" } else { "" };
+                let forecast_badge = if snap.forecast_json.is_some() { " [forecast ✓]" } else { "" };
+                let resolved_badge = if snap.actual_outcome_json.is_some() { " [resolved]" } else { "" };
+
+                let entry_preview = if snap.entry_text.len() > 30 {
+                    format!("{}…", &snap.entry_text[..30])
+                } else {
+                    snap.entry_text.clone()
+                };
+
+                lines.push(Line::from(vec![
+                    Span::styled(cursor, style),
+                    Span::styled(
+                        format!("Step {:>3}: {}", snap.step, entry_preview),
+                        style,
+                    ),
+                    Span::styled(
+                        format!("[{preview}]{forecast_badge}{resolved_badge}{head_marker}"),
+                        Style::default().fg(DIM),
+                    ),
+                ]));
+            }
+        }
+
+        lines.push(Line::raw(""));
+        lines.push(Line::from(Span::styled(
+            " ↑↓ navigate  Enter detail  A append  R sim from here  F fork  B forks  Esc back",
+            Style::default().fg(DIM),
+        )));
+    }
+
+    let block = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .title(format!(" Snapshots — {} ", app.active_timeline_name))
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(ACCENT)),
+        )
+        .wrap(Wrap { trim: false });
+
+    f.render_widget(block, chunks[0]);
+
+    let footer = if app.timeline_input_mode {
+        Paragraph::new(Line::from(vec![
+            Span::styled(" Esc ", Style::default().fg(ACCENT).bold()),
+            Span::raw("cancel  "),
+            Span::styled(" Enter ", Style::default().fg(ACCENT).bold()),
+            Span::raw("confirm"),
+        ]))
+        .style(Style::default().bg(HEADER_BG))
+    } else {
+        Paragraph::new(Line::from(vec![
+            Span::styled(" ↑↓ ", Style::default().fg(ACCENT).bold()),
+            Span::raw("navigate  "),
+            Span::styled(" Enter ", Style::default().fg(ACCENT).bold()),
+            Span::raw("detail  "),
+            Span::styled(" A ", Style::default().fg(ACCENT).bold()),
+            Span::raw("append  "),
+            Span::styled(" R ", Style::default().fg(ACCENT).bold()),
+            Span::raw("sim  "),
+            Span::styled(" F ", Style::default().fg(ACCENT).bold()),
+            Span::raw("fork  "),
+            Span::styled(" Esc ", Style::default().fg(ACCENT).bold()),
+            Span::raw("back  "),
+            Span::styled(" Q ", Style::default().fg(ACCENT).bold()),
+            Span::raw("quit"),
+        ]))
+        .style(Style::default().bg(HEADER_BG))
+    };
+    f.render_widget(footer, chunks[1]);
+}
+
+// ── Snapshot Detail ────────────────────────────────────────────────────────────────
+
+fn render_snapshot_detail(f: &mut Frame, app: &App) {
+    let snap = match app.snapshots.get(app.snapshot_idx) {
+        Some(s) => s,
+        None => {
+            render_error(f, "No snapshot selected.");
+            return;
+        }
+    };
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0), Constraint::Length(1)])
+        .split(f.area());
+
+    let mut lines: Vec<Line> = Vec::new();
+
+    // Header
+    lines.push(Line::from(vec![
+        Span::styled(
+            format!(" Snapshot Step {} ", snap.step),
+            Style::default().fg(ACCENT).bold(),
+        ),
+        if snap.step as usize == app.snapshots.len() - 1 {
+            Span::styled(" ◄ HEAD", Style::default().fg(GOOD))
+        } else {
+            Span::raw("")
+        },
+    ]));
+    lines.push(Line::raw(""));
+
+    // Entry text
+    if !snap.entry_text.is_empty() {
+        lines.push(Line::from(Span::styled(
+            format!(" Entry: {}", snap.entry_text),
+            Style::default().fg(YELLOW),
+        )));
+        lines.push(Line::raw(""));
+    }
+
+    // Created at
+    lines.push(Line::from(Span::styled(
+        format!(" Created: {}", snap.created_at),
+        Style::default().fg(DIM),
+    )));
+    lines.push(Line::raw(""));
+
+    // Attribute values — resolved by schema names
+    lines.push(Line::from(Span::styled(
+        " Attribute values:",
+        Style::default().fg(DIM),
+    )));
+    let values: Vec<f64> = serde_json::from_str(&snap.attributes_json).unwrap_or_default();
+    for (i, val) in values.iter().enumerate() {
+        let attr_name = app.schema.attributes.get(i).map(|a| a.name.as_str()).unwrap_or("?");
+        lines.push(Line::from(Span::raw(format!(
+            "   {:<24} = {:.2}", attr_name, val
+        ))));
+    }
+    lines.push(Line::raw(""));
+
+    // Decision info
+    if let Some(decision_id) = snap.decision_id {
+        let decision_name = app.decisions.iter()
+            .find(|d| d.label.contains(&decision_id.to_string()))
+            .map(|d| d.label.as_str())
+            .unwrap_or("?");
+        lines.push(Line::from(Span::styled(
+            format!(" Decision: {} (ID: {})", decision_name, decision_id),
+            Style::default().fg(ACCENT),
+        )));
+        if let Some(ref chosen) = snap.decision_chosen_outcome {
+            lines.push(Line::from(Span::styled(
+                format!(" Chosen outcome: {chosen}"),
+                Style::default().fg(YELLOW),
+            )));
+        }
+        lines.push(Line::raw(""));
+    }
+
+    // Forecast info
+    if let Some(ref forecast_json) = snap.forecast_json {
+        lines.push(Line::from(Span::styled(
+            " Forecast:",
+            Style::default().fg(DIM),
+        )));
+        // Try to show pretty-printed forecast summary
+        if let Ok(forecast_val) = serde_json::from_str::<serde_json::Value>(forecast_json) {
+            if let Some(probs) = forecast_val.get("outcome_probabilities") {
+                if let Some(arr) = probs.as_array() {
+                    for (i, prob_val) in arr.iter().enumerate() {
+                        if let Some(p) = prob_val.as_f64() {
+                            let outcome_label = app
+                                .last_decision
+                                .as_ref()
+                                .and_then(|d| d.outcomes.get(i))
+                                .map(|o| o.label.as_str())
+                                .unwrap_or("outcome");
+                            lines.push(Line::from(Span::raw(format!(
+                                "   {outcome_label:<24} {:.1}%",
+                                p * 100.0
+                            ))));
+                        }
+                    }
+                }
+            }
+            if let Some(util) = forecast_val.get("expected_utility") {
+                if let Some(u) = util.as_f64() {
+                    lines.push(Line::from(Span::raw(format!("   Expected utility: {u:.1}"))));
+                }
+            }
+        } else {
+            // Raw JSON
+            lines.push(Line::from(Span::raw(format!("   {forecast_json}"))));
+        }
+        lines.push(Line::raw(""));
+    }
+
+    // Actual outcome
+    if let Some(ref actual_json) = snap.actual_outcome_json {
+        lines.push(Line::from(Span::styled(
+            " Resolved actual outcome:",
+            Style::default().fg(GOOD),
+        )));
+        if let Ok(deltas) = serde_json::from_str::<Vec<f64>>(actual_json) {
+            for (i, delta) in deltas.iter().enumerate() {
+                let attr_name = app.schema.attributes.get(i).map(|a| a.name.as_str()).unwrap_or("?");
+                let sign = if *delta >= 0.0 { "+" } else { "" };
+                lines.push(Line::from(Span::raw(format!(
+                    "   {attr_name:<24} {sign}{:.2}", delta
+                ))));
+            }
+        } else {
+            lines.push(Line::from(Span::raw(format!("   {actual_json}"))));
+        }
+        lines.push(Line::raw(""));
+    }
+
+    lines.push(Line::from(Span::styled(
+        " Esc back  R sim from here  U resolve outcome  ↑↓ scroll",
+        Style::default().fg(DIM),
+    )));
+
+    let block = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .title(format!(" Snapshot Step {} ", snap.step))
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(ACCENT)),
+        )
+        .wrap(Wrap { trim: false })
+        .scroll((app.scroll.offset as u16, 0));
+
+    f.render_widget(block, chunks[0]);
+
+    let footer = Paragraph::new(Line::from(vec![
+        Span::styled(" Esc ", Style::default().fg(ACCENT).bold()),
+        Span::raw("back  "),
+        Span::styled(" R ", Style::default().fg(ACCENT).bold()),
+        Span::raw("sim  "),
+        Span::styled(" U ", Style::default().fg(ACCENT).bold()),
+        Span::raw("resolve  "),
+        Span::styled(" ↑↓ ", Style::default().fg(ACCENT).bold()),
+        Span::raw("scroll  "),
+        Span::styled(" Q ", Style::default().fg(ACCENT).bold()),
+        Span::raw("quit"),
+    ]))
+    .style(Style::default().bg(HEADER_BG));
+    f.render_widget(footer, chunks[1]);
+}
+
+// ── Fork Browser ───────────────────────────────────────────────────────────────────
+
+fn render_fork_browser(f: &mut Frame, app: &App) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0), Constraint::Length(1)])
+        .split(f.area());
+
+    let mut lines: Vec<Line> = Vec::new();
+
+    lines.push(Line::from(Span::styled(
+        format!(" Forks from \"{}\":", app.active_timeline_name),
+        Style::default().fg(ACCENT).bold(),
+    )));
+    lines.push(Line::raw(""));
+
+    if app.forks.is_empty() {
+        lines.push(Line::from(Span::styled(
+            " No forks yet. Press F on a snapshot to create a fork.",
+            Style::default().fg(DIM),
+        )));
+    } else {
+        for (i, fk) in app.forks.iter().enumerate() {
+            let cursor = if i == app.fork_idx { " > " } else { "   " };
+            let style = if i == app.fork_idx {
+                Style::default().fg(ACCENT).bold()
+            } else {
+                Style::default().fg(Color::White)
+            };
+
+            // Find child timeline name
+            let child_name = app.timelines
+                .iter()
+                .find(|t| t.id == fk.child_timeline_id)
+                .map(|t| t.name.as_str())
+                .unwrap_or("?");
+
+            lines.push(Line::from(vec![
+                Span::styled(cursor, style),
+                Span::styled(format!("{:<20}", fk.label), style),
+                Span::styled(
+                    format!("→ {child_name}"),
+                    Style::default().fg(DIM),
+                ),
+            ]));
+        }
+    }
+
+    lines.push(Line::raw(""));
+    lines.push(Line::from(Span::styled(
+        " ↑↓ navigate  Enter open child timeline  Esc back",
+        Style::default().fg(DIM),
+    )));
+
+    let block = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .title(" Fork Browser ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(ACCENT)),
+        )
+        .wrap(Wrap { trim: false });
+
+    f.render_widget(block, chunks[0]);
+
+    let footer = Paragraph::new(Line::from(vec![
+        Span::styled(" ↑↓ ", Style::default().fg(ACCENT).bold()),
+        Span::raw("navigate  "),
+        Span::styled(" Enter ", Style::default().fg(ACCENT).bold()),
+        Span::raw("open child  "),
+        Span::styled(" Esc ", Style::default().fg(ACCENT).bold()),
+        Span::raw("back  "),
         Span::styled(" Q ", Style::default().fg(ACCENT).bold()),
         Span::raw("quit"),
     ]))
