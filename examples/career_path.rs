@@ -72,6 +72,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  Schedule aborted: {} / {} runs", result.schedule_aborted, sim.monte_carlo_runs);
     println!();
 
+    // Per-decision outcome probabilities
+    println!("  ── Per-decision outcome probabilities ───");
+    println!();
+    // Group counts by schedule entry
+    let mut entry_counts: Vec<Vec<(usize, usize)>> = vec![Vec::new(); schedule.entries.len()];
+    for ((entry_idx, outcome_idx), &count) in &result.outcome_counts {
+        entry_counts[*entry_idx].push((*outcome_idx, count));
+    }
+    for (i, sched) in schedule.entries.iter().enumerate() {
+        println!("    Entry {} (step {}): \"{}\"", i, sched.at_step, sched.decision.label);
+        if entry_counts[i].is_empty() {
+            println!("      (no samples — decision skipped or run aborted)");
+            continue;
+        }
+        let total: usize = entry_counts[i].iter().map(|(_, c)| c).sum();
+        for (outcome_idx, count) in &entry_counts[i] {
+            let pct = *count as f64 / total as f64 * 100.0;
+            let label = sched.decision.outcomes.get(*outcome_idx)
+                .map_or("unknown", |o| o.label.as_str());
+            println!("      {}: {:.1}%", label, pct);
+        }
+    }
+    println!();
+
     // Per-attribute final distributions
     println!("  ── Final attribute outcomes ───");
     println!();

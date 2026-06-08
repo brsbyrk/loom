@@ -138,9 +138,10 @@ pub struct SimulationResult {
     /// at step `j` for run `i`.
     pub utility_traces: Vec<Vec<f64>>,
 
-    /// How many times each outcome index was sampled across runs.
-    /// Keys are indices into `decision.outcomes`.
-    pub outcome_counts: HashMap<usize, usize>,
+    /// Outcome sampling counts per schedule entry.
+    /// Keys are `(schedule_entry_index, outcome_index)`. For single-decision
+    /// simulations, all keys have `schedule_entry_index = 0`.
+    pub outcome_counts: HashMap<(usize, usize), usize>,
 }
 
 // ── Simulation ───────────────────────────────────────────────────────────────────────
@@ -211,7 +212,7 @@ impl Simulation {
         let mut rng = StdRng::from_entropy();
         let mut final_states = Vec::with_capacity(self.monte_carlo_runs);
         let mut utility_traces = Vec::with_capacity(self.monte_carlo_runs);
-        let mut outcome_counts: HashMap<usize, usize> = HashMap::new();
+        let mut outcome_counts: HashMap<(usize, usize), usize> = HashMap::new();
 
         for _run in 0..self.monte_carlo_runs {
             // 1. Clone initial state
@@ -224,7 +225,7 @@ impl Simulation {
 
             // 3. Sample outcome
             let outcome_idx = self.sample_outcome(&decision.outcomes, &state, &mut rng);
-            *outcome_counts.entry(outcome_idx).or_insert(0) += 1;
+            *outcome_counts.entry((0, outcome_idx)).or_insert(0) += 1;
 
             // 4. Apply outcome transform
             decision.outcomes[outcome_idx]
@@ -301,7 +302,7 @@ impl Simulation {
         let mut rng = StdRng::from_entropy();
         let mut final_states = Vec::with_capacity(self.monte_carlo_runs);
         let mut utility_traces = Vec::with_capacity(self.monte_carlo_runs);
-        let mut outcome_counts: HashMap<usize, usize> = HashMap::new();
+        let mut outcome_counts: HashMap<(usize, usize), usize> = HashMap::new();
         let mut schedule_aborted = 0usize;
 
         for _run in 0..self.monte_carlo_runs {
@@ -311,7 +312,10 @@ impl Simulation {
 
             for step in 0..=self.horizon {
                 // 1. Apply scheduled decisions at this step
-                for sched in schedule.at_step(step) {
+                for (entry_idx, sched) in schedule.entries.iter().enumerate() {
+                    if sched.at_step != step {
+                        continue;
+                    }
                     // Check preconditions
                     if !sched.decision.available(&state) {
                         if sched.required {
@@ -330,7 +334,7 @@ impl Simulation {
                     // Sample outcome
                     let outcome_idx =
                         self.sample_outcome(&sched.decision.outcomes, &state, &mut rng);
-                    *outcome_counts.entry(outcome_idx).or_insert(0) += 1;
+                    *outcome_counts.entry((entry_idx, outcome_idx)).or_insert(0) += 1;
 
                     // Apply outcome transform
                     sched.decision.outcomes[outcome_idx]
@@ -567,7 +571,7 @@ mod tests {
         let result = sim.run(&initial, &decision, &goal);
 
         // The 10% outcome should appear roughly 10% of the time
-        let count_rare = *result.outcome_counts.get(&1).unwrap_or(&0);
+        let count_rare = *result.outcome_counts.get(&(0, 1)).unwrap_or(&0);
         // With 1000 runs and p=0.1, 95% CI is roughly 81–119.
         // Use a generous tolerance for CI robustness in CI.
         assert!(count_rare >= 70, "rare outcome undersampled: {count_rare}");
@@ -615,8 +619,8 @@ mod tests {
             1,
             "only one outcome should be sampled"
         );
-        assert!(result.outcome_counts.contains_key(&1));
-        assert!(!result.outcome_counts.contains_key(&0));
+        assert!(result.outcome_counts.contains_key(&(0, 1)));
+        assert!(!result.outcome_counts.contains_key(&(0, 0)));
     }
 
     #[test]

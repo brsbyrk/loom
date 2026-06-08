@@ -123,9 +123,11 @@ pub struct DecisionAnalysis {
     /// For charting: does utility peak early and decay, or climb steadily?
     pub utility_over_time: Vec<TimeBand>,
 
-    /// Empirical outcome probabilities. Each entry is `(outcome_index, probability)`.
-    /// Indices correspond to `decision.outcomes`.
-    pub outcome_probabilities: Vec<(usize, f64)>,
+    /// Per-schedule-entry outcome probabilities.
+    /// `outcome_probabilities[i]` is the probability distribution for schedule entry `i`.
+    /// Each inner entry is `(outcome_index, probability)`.
+    /// For single-decision simulations, this has one outer entry.
+    pub outcome_probabilities: Vec<Vec<(usize, f64)>>,
 }
 
 impl DecisionAnalysis {
@@ -161,12 +163,22 @@ impl DecisionAnalysis {
         // Utility over time
         let utility_over_time = TimeBand::from_traces(&result.utility_traces);
 
-        // Outcome probabilities
-        let outcome_probabilities: Vec<(usize, f64)> = result
+        // Outcome probabilities — grouped by schedule entry index
+        let num_entries = result
             .outcome_counts
-            .iter()
-            .map(|(idx, count)| (*idx, *count as f64 / num_runs as f64))
-            .collect();
+            .keys()
+            .map(|(e, _)| *e)
+            .max()
+            .map_or(0, |m| m + 1);
+        let mut outcome_probabilities: Vec<Vec<(usize, f64)>> = vec![Vec::new(); num_entries];
+        for ((entry_idx, outcome_idx), &count) in &result.outcome_counts {
+            outcome_probabilities[*entry_idx]
+                .push((*outcome_idx, count as f64 / num_runs as f64));
+        }
+        // Sort each entry's outcomes by index for deterministic output
+        for probs in &mut outcome_probabilities {
+            probs.sort_by_key(|(idx, _)| *idx);
+        }
 
         DecisionAnalysis {
             decision_available: true,
@@ -279,7 +291,7 @@ mod tests {
             schedule_aborted: 0,
             final_states: vec![vec![100.0, 50.0], vec![200.0, 30.0]],
             utility_traces: vec![vec![100.0, 120.0], vec![150.0, 140.0]],
-            outcome_counts: HashMap::from([(0, 2)]),
+            outcome_counts: HashMap::from([((0, 0), 2)]),
         };
 
         let analysis = DecisionAnalysis::from_result(&result);
@@ -290,7 +302,7 @@ mod tests {
         // Attribute 0: 100, 200 → mean 150
         assert!((analysis.attribute_outcomes[0].mean - 150.0).abs() < 0.01);
         // Outcome 0: 2/2 = 1.0
-        assert_eq!(analysis.outcome_probabilities, vec![(0, 1.0)]);
+        assert_eq!(analysis.outcome_probabilities, vec![vec![(0, 1.0)]]);
         // Two time steps
         assert_eq!(analysis.utility_over_time.len(), 2);
     }

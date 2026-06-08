@@ -298,7 +298,7 @@ fn render_results(f: &mut Frame, app: &App) {
             Style::default().fg(DIM),
         )));
 
-        for (idx, prob) in &analysis.outcome_probabilities {
+        for (idx, prob) in &analysis.outcome_probabilities[0] {
             let label = decision
                 .outcomes
                 .get(*idx)

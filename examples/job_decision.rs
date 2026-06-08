@@ -95,7 +95,7 @@ fn print_analysis(
     // Outcome probabilities
     println!("  ── Outcome probabilities ───");
     println!();
-    for (idx, prob) in &analysis.outcome_probabilities {
+    for (idx, prob) in &analysis.outcome_probabilities[0] {
         let label = decision
             .outcomes
             .get(*idx)
