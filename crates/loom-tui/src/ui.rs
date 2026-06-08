@@ -41,6 +41,8 @@ pub fn render(f: &mut Frame, app: &App) {
         Screen::SnapshotList => render_snapshot_list(f, app),
         Screen::SnapshotDetail => render_snapshot_detail(f, app),
         Screen::ForkBrowser => render_fork_browser(f, app),
+        Screen::EditEvents => render_edit_events(f, app),
+        Screen::EditEventsDetail => render_edit_events_detail(f, app),
     }
 }
 
@@ -1919,6 +1921,237 @@ fn render_error(f: &mut Frame, msg: &str) {
     f.render_widget(text, chunks[0]);
 
     let footer = Paragraph::new(Line::from(vec![
+        Span::styled(" Q ", Style::default().fg(ACCENT).bold()),
+        Span::raw("quit"),
+    ]))
+    .style(Style::default().bg(HEADER_BG));
+    f.render_widget(footer, chunks[1]);
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Event editor screens
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ── Edit Events list screen ────────────────────────────────────────────────
+
+fn render_edit_events(f: &mut Frame, app: &App) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0), Constraint::Length(1)])
+        .split(f.area());
+
+    let mut lines: Vec<Line> = Vec::new();
+    lines.push(Line::from(Span::styled(
+        " Edit Events — event templates fire automatically when appending snapshots.",
+        Style::default().fg(ACCENT).bold(),
+    )));
+    lines.push(Line::raw(""));
+
+    // Confirmation prompt
+    if let Some(ref msg) = app.confirm_delete {
+        lines.push(Line::from(Span::styled(
+            format!(" Delete \"{msg}\"? (y/n)"),
+            Style::default().fg(BAD).bold(),
+        )));
+        let block = Paragraph::new(lines)
+            .block(
+                Block::default()
+                    .title(" Edit Events ")
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(ACCENT)),
+            )
+            .wrap(Wrap { trim: false });
+        f.render_widget(block, chunks[0]);
+        let footer = Paragraph::new(Line::from(vec![
+            Span::styled(" y/n ", Style::default().fg(ACCENT).bold()),
+            Span::raw("confirm/deny  "),
+        ]))
+        .style(Style::default().bg(HEADER_BG));
+        f.render_widget(footer, chunks[1]);
+        return;
+    }
+
+    if app.edit_events.is_empty() {
+        lines.push(Line::from(Span::styled(
+            " No events defined. Press N to add one.",
+            Style::default().fg(DIM),
+        )));
+    } else {
+        for (i, e) in app.edit_events.iter().enumerate() {
+            let cursor = if i == app.edit_event_idx { " > " } else { "   " };
+            let style = if i == app.edit_event_idx {
+                Style::default().fg(ACCENT).bold()
+            } else {
+                Style::default().fg(Color::White)
+            };
+            let precond_count = e.preconditions.len();
+            let effect_count = e.effects.len();
+            lines.push(Line::from(vec![
+                Span::styled(cursor, style),
+                Span::styled(format!("{:<24}", e.label), style),
+                Span::styled(
+                    format!("({precond_count} pre, {effect_count} effects, delay={}, dur={}, cd={})", e.delay, e.duration, e.cooldown),
+                    Style::default().fg(DIM),
+                ),
+            ]));
+        }
+    }
+
+    let block = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .title(" Edit Events ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(ACCENT)),
+        )
+        .wrap(Wrap { trim: false });
+    f.render_widget(block, chunks[0]);
+
+    let footer = Paragraph::new(Line::from(vec![
+        Span::styled(" ↑↓ ", Style::default().fg(ACCENT).bold()),
+        Span::raw("navigate  "),
+        Span::styled(" Enter ", Style::default().fg(ACCENT).bold()),
+        Span::raw("edit  "),
+        Span::styled(" N ", Style::default().fg(ACCENT).bold()),
+        Span::raw("new  "),
+        Span::styled(" D ", Style::default().fg(ACCENT).bold()),
+        Span::raw("delete  "),
+        Span::styled(" Esc ", Style::default().fg(ACCENT).bold()),
+        Span::raw("back  "),
+        Span::styled(" Q ", Style::default().fg(ACCENT).bold()),
+        Span::raw("quit"),
+    ]))
+    .style(Style::default().bg(HEADER_BG));
+    f.render_widget(footer, chunks[1]);
+}
+
+// ── Edit Events Detail screen ────────────────────────────────────────────
+
+fn render_edit_events_detail(f: &mut Frame, app: &App) {
+    let state = match &app.edit_event_detail {
+        Some(s) => s,
+        None => {
+            render_error(f, "No event edit state.");
+            return;
+        }
+    };
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0), Constraint::Length(1)])
+        .split(f.area());
+
+    let mut lines: Vec<Line> = Vec::new();
+    lines.push(Line::from(Span::styled(
+        format!(" Editing Event [{}]: ", state.idx),
+        Style::default().fg(ACCENT).bold(),
+    )));
+
+    // Event ID
+    lines.push(Line::from(vec![
+        Span::styled(" ID: ", Style::default().fg(DIM)),
+        Span::styled(&state.event_id, Style::default().fg(Color::White)),
+    ]));
+
+    // Label
+    lines.push(Line::from(vec![
+        Span::styled(" Label: ", Style::default().fg(DIM)),
+        Span::styled(&state.label, Style::default().fg(Color::White)),
+    ]));
+
+    // Description
+    lines.push(Line::from(vec![
+        Span::styled(" Desc: ", Style::default().fg(DIM)),
+        Span::styled(&state.description, Style::default().fg(DIM)),
+    ]));
+
+    // Delay, Duration, Cooldown
+    lines.push(Line::from(vec![
+        Span::styled(" Delay: ", Style::default().fg(DIM)),
+        Span::styled(format!("{}", state.delay), Style::default().fg(Color::White)),
+        Span::styled("  Duration: ", Style::default().fg(DIM)),
+        Span::styled(format!("{}", state.duration), Style::default().fg(Color::White)),
+        Span::styled("  Cooldown: ", Style::default().fg(DIM)),
+        Span::styled(format!("{}", state.cooldown), Style::default().fg(Color::White)),
+    ]));
+
+    // Spawns decision
+    lines.push(Line::from(vec![
+        Span::styled(" Spawns decision: ", Style::default().fg(DIM)),
+        Span::styled(&state.spawns_decision_id, Style::default().fg(YELLOW)),
+    ]));
+    lines.push(Line::raw(""));
+
+    // Preconditions
+    lines.push(Line::from(Span::styled(
+        " Preconditions:",
+        Style::default().fg(DIM),
+    )));
+    for (j, c) in state.preconditions.iter().enumerate() {
+        let sel = if j == state.list_idx { " > " } else { "   " };
+        let s = if j == state.list_idx {
+            Style::default().fg(ACCENT).bold()
+        } else {
+            Style::default().fg(Color::White)
+        };
+        lines.push(Line::from(vec![
+            Span::styled(sel, s),
+            Span::styled(format!("{} {:?} {}", c.attribute, c.operator, c.value), s),
+        ]));
+    }
+    lines.push(Line::from(Span::styled(
+        " [a] add condition  [d] delete selected",
+        Style::default().fg(DIM),
+    )));
+    lines.push(Line::raw(""));
+
+    // Effects
+    lines.push(Line::from(Span::styled(
+        " Effects:",
+        Style::default().fg(DIM),
+    )));
+    for (j, eff) in state.effects.iter().enumerate() {
+        let sel = if j == state.list_idx { " > " } else { "   " };
+        let s = if j == state.list_idx {
+            Style::default().fg(ACCENT).bold()
+        } else {
+            Style::default().fg(Color::White)
+        };
+        let sign = if eff.delta >= 0.0 { "+" } else { "" };
+        let aname = eff.attribute.as_deref().unwrap_or("?");
+        lines.push(Line::from(vec![
+            Span::styled(sel, s),
+            Span::styled(format!("{aname} {sign}{}", eff.delta), s),
+        ]));
+    }
+    lines.push(Line::from(Span::styled(
+        " [e] add effect  [f] delete selected effect",
+        Style::default().fg(DIM),
+    )));
+
+    lines.push(Line::raw(""));
+    lines.push(Line::from(Span::styled(
+        " [Esc] save & back  Tab: cycle fields  Enter: edit text",
+        Style::default().fg(DIM),
+    )));
+
+    let block = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .title(" Edit Event Detail ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(ACCENT)),
+        )
+        .wrap(Wrap { trim: false });
+    f.render_widget(block, chunks[0]);
+
+    let footer = Paragraph::new(Line::from(vec![
+        Span::styled(" Tab ", Style::default().fg(ACCENT).bold()),
+        Span::raw("field  "),
+        Span::styled(" ↑↓ ", Style::default().fg(ACCENT).bold()),
+        Span::raw("list item  "),
+        Span::styled(" Esc ", Style::default().fg(ACCENT).bold()),
+        Span::raw("save & back  "),
         Span::styled(" Q ", Style::default().fg(ACCENT).bold()),
         Span::raw("quit"),
     ]))

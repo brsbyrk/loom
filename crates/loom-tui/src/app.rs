@@ -6,6 +6,7 @@ use loom_core::{
     Simulation,
 };
 use loom_store::{ForkRow, SchemaSummary, SnapshotRow, Store, TimelineStore, TimelineSummary};
+use loom_store::{AppliedEventEffect, NamedEvent};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -44,6 +45,10 @@ pub enum Screen {
     SnapshotDetail,
     /// Fork browser — list forks for a timeline.
     ForkBrowser,
+    /// Edit events list.
+    EditEvents,
+    /// Edit a single event's fields.
+    EditEventsDetail,
 }
 
 /// Scroll state for scrollable content.
@@ -114,6 +119,23 @@ pub struct GoalEditState {
     pub text_buffer: String,
     pub list_idx: usize,
     pub show_weights: bool, // true=editing weights, false=editing cliffs
+}
+
+/// State for the inline event editor.
+#[derive(Debug, Clone)]
+pub struct EventEditState {
+    pub idx: usize,
+    pub event_id: String,
+    pub label: String,
+    pub description: String,
+    pub preconditions: Vec<NamedCondition>,
+    pub delay: u32,
+    pub duration: u32,
+    pub cooldown: u32,
+    pub effects: Vec<NamedEffect>,
+    pub spawns_decision_id: String,
+    pub text_buffer: String,
+    pub list_idx: usize,
 }
 
 /// The full application state.
@@ -188,6 +210,13 @@ pub struct App {
     pub edit_goals: Vec<(String, NamedGoalVector)>,
     pub edit_goal_idx: usize,
     pub edit_goal_detail: Option<GoalEditState>,
+
+    pub edit_events: Vec<NamedEvent>,
+    pub edit_event_idx: usize,
+    pub edit_event_detail: Option<EventEditState>,
+
+    pub active_events_status: Vec<String>, // Display strings for active events on current timeline
+    pub last_event_effects: Vec<AppliedEventEffect>, // Effects from last append
 
     // ── Timeline state ──────────────────────────────────────────────────────────
     /// Tab: 0=Timeline, 1=Explore, 2=Config
@@ -293,6 +322,13 @@ impl App {
             edit_goals: Vec::new(),
             edit_goal_idx: 0,
             edit_goal_detail: None,
+
+            edit_events: Vec::new(),
+            edit_event_idx: 0,
+            edit_event_detail: None,
+
+            active_events_status: Vec::new(),
+            last_event_effects: Vec::new(),
             tab: 0,
             timelines: Vec::new(),
             active_timeline_id: None,
@@ -894,5 +930,175 @@ impl App {
             }
         }
         false
+    }
+
+    // ── Event edit methods ────────────────────────────────────────────────────
+
+    pub fn open_edit_events(&mut self) {
+        self.edit_events = self.store.list_events(&self.schema_name).unwrap_or_default();
+        self.edit_event_idx = 0;
+        self.prev_screen = self.screen.clone();
+        self.screen = Screen::EditEvents;
+    }
+
+    pub fn edit_event_prev(&mut self) {
+        if !self.edit_events.is_empty() {
+            self.edit_event_idx = self
+                .edit_event_idx
+                .checked_sub(1)
+                .unwrap_or(self.edit_events.len() - 1);
+        }
+    }
+
+    pub fn edit_event_next(&mut self) {
+        if !self.edit_events.is_empty() {
+            self.edit_event_idx = (self.edit_event_idx + 1) % self.edit_events.len();
+        }
+    }
+
+    pub fn open_event_detail(&mut self, idx: usize) {
+        if let Some(e) = self.edit_events.get(idx) {
+            self.edit_event_detail = Some(EventEditState {
+                idx,
+                event_id: e.id.clone(),
+                label: e.label.clone(),
+                description: e.description.clone(),
+                preconditions: e.preconditions.clone(),
+                delay: e.delay,
+                duration: e.duration,
+                cooldown: e.cooldown,
+                effects: e.effects.clone(),
+                spawns_decision_id: e.spawns_decision_id.clone().unwrap_or_default(),
+                text_buffer: String::new(),
+                list_idx: 0,
+            });
+            self.screen = Screen::EditEventsDetail;
+        }
+    }
+
+    pub fn save_event_edit(&mut self) {
+        if let Some(state) = self.edit_event_detail.take() {
+            let ne = NamedEvent {
+                id: state.event_id,
+                label: state.label,
+                description: state.description,
+                preconditions: state.preconditions,
+                delay: state.delay,
+                duration: state.duration,
+                cooldown: state.cooldown,
+                effects: state.effects,
+                spawns_decision_id: if state.spawns_decision_id.is_empty() {
+                    None
+                } else {
+                    Some(state.spawns_decision_id)
+                },
+            };
+            let _ = self.store.upsert_event(&self.schema_name, &ne);
+            self.reload_data();
+            self.edit_events = self.store.list_events(&self.schema_name).unwrap_or_default();
+        }
+        self.screen = Screen::EditEvents;
+    }
+
+    pub fn delete_edit_event(&mut self, idx: usize) -> bool {
+        if let Some(e) = self.edit_events.get(idx) {
+            if self.store.delete_event(&self.schema_name, &e.id).is_ok() {
+                self.edit_events.remove(idx);
+                if self.edit_event_idx >= self.edit_events.len() && !self.edit_events.is_empty() {
+                    self.edit_event_idx = self.edit_events.len() - 1;
+                }
+                self.reload_data();
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Append a snapshot with event auto-effects integrated.
+    pub fn append_snapshot_with_events(&mut self, entry_text: &str) -> i64 {
+        let timeline_id = match self.active_timeline_id {
+            Some(id) => id,
+            None => return 0,
+        };
+        let mut values = self.current_state.as_slice().to_vec();
+        let parent_id = self.snapshots.last().map(|s| s.id);
+        let ts = TimelineStore::new(&self.store.conn);
+
+        // Check events
+        if !self.schema_name.is_empty() {
+            match ts.check_and_advance_events(timeline_id, &self.schema_name, &values) {
+                Ok(effects) => {
+                    self.last_event_effects = effects.clone();
+                    // Apply deltas to values
+                    for eff in &effects {
+                        if let Some(idx) = self.schema.index_of(&eff.attribute_name) {
+                            if idx < values.len() {
+                                values[idx] += eff.delta;
+                            }
+                        }
+                    }
+                    // Build entry text with event info
+                    let mut full_entry = entry_text.to_string();
+                    for eff in &effects {
+                        if eff.phase == "pending" {
+                            full_entry.push_str(&format!("\n⏳ {}", eff.description));
+                        } else if eff.phase == "active" {
+                            full_entry.push_str(&format!("\n🚗 {}", eff.description));
+                        } else if eff.phase == "resolved" {
+                            full_entry.push_str(&format!("\n✅ {}", eff.description));
+                        }
+                        if let Some(ref dec_id) = eff.spawned_decision_id {
+                            full_entry.push_str(&format!("\n❓ Decision spawned: {}", dec_id));
+                        }
+                    }
+                    let id = ts
+                        .append_snapshot(timeline_id, parent_id, &full_entry, &values)
+                        .unwrap_or(0);
+
+                    // Update current_state to match snapshot
+                    self.current_state = DynamicState::from_vec(values, self.schema.clone());
+
+                    // Refresh active event status
+                    self.refresh_active_events_status();
+
+                    self.load_snapshots(timeline_id);
+                    self.snapshot_idx = self.snapshots.len().saturating_sub(1);
+                    return id;
+                }
+                Err(e) => {
+                    eprintln!("Event processing error: {e}");
+                }
+            }
+        }
+
+        // Fallback: plain append
+        let id = ts
+            .append_snapshot(timeline_id, parent_id, entry_text, &values)
+            .unwrap_or(0);
+        self.current_state = DynamicState::from_vec(values, self.schema.clone());
+        self.load_snapshots(timeline_id);
+        self.snapshot_idx = self.snapshots.len().saturating_sub(1);
+        id
+    }
+
+    pub fn refresh_active_events_status(&mut self) {
+        if let Some(timeline_id) = self.active_timeline_id {
+            let ts = TimelineStore::new(&self.store.conn);
+            if let Ok(statuses) = ts.get_active_events_status(timeline_id) {
+                self.active_events_status = statuses
+                    .iter()
+                    .map(|(label, phase, remaining, _total, _cooldown)| {
+                        match phase.as_str() {
+                            "pending" => format!("⏳ {} pending ({} steps)", label, remaining),
+                            "active" => format!("🚗 {} active ({}/?)", label, remaining),
+                            "cooldown" => format!("🕐 {} cooldown ({} steps)", label, remaining),
+                            _ => format!("{}: {}", label, phase),
+                        }
+                    })
+                    .collect();
+            }
+        } else {
+            self.active_events_status.clear();
+        }
     }
 }

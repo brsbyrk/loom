@@ -8,7 +8,7 @@ mod ui;
 
 use app::{App, EditField, Screen, ScrollState, TimelineInputAction};
 use loom_core::{DynamicState, NamedCondition, NamedEffect, NamedOutcome, NamedTransform};
-use loom_store::{Store, TimelineStore};
+use loom_store::{AppliedEventEffect, NamedEvent, Store, TimelineStore};
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::DefaultTerminal;
 
@@ -66,6 +66,16 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App) -> Result<(), Box<dyn std:
                     }
                     continue;
                 }
+                // Events editor shortcut from Timeline tab
+                KeyCode::Char('4') => {
+                    app.tab = 2;
+                    if app.schema_name.is_empty() {
+                        app.screen = Screen::SchemaList;
+                    } else {
+                        app.screen = Screen::EditEvents;
+                    }
+                    continue;
+                }
                 _ => {}
             }
             match app.screen.clone() {
@@ -88,6 +98,8 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App) -> Result<(), Box<dyn std:
                 Screen::SnapshotList => handle_snapshot_list(app, key.code),
                 Screen::SnapshotDetail => handle_snapshot_detail(app, key.code),
                 Screen::ForkBrowser => handle_fork_browser(app, key.code),
+                Screen::EditEvents => handle_edit_events(app, key.code),
+                Screen::EditEventsDetail => handle_edit_events_detail(app, key.code),
             }
         }
     }
@@ -848,7 +860,7 @@ fn handle_snapshot_list(app: &mut App, code: KeyCode) {
                     }
                     KeyCode::Enter => {
                         let entry = app.input_buffer.trim().to_string();
-                        app.append_snapshot_to_timeline(&entry);
+                        app.append_snapshot_with_events(&entry);
                         app.timeline_input_mode = false;
                         app.input_buffer.clear();
                         app.timeline_input_action = TimelineInputAction::None;
@@ -1026,6 +1038,130 @@ fn handle_fork_browser(app: &mut App, code: KeyCode) {
                 if let Some(idx) = app.timelines.iter().position(|t| t.id == child_id) {
                     app.timeline_idx = idx;
                     app.open_timeline(idx);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Event editor handlers
+// ══════════════════════════════════════════════════════════════════════════════
+
+fn handle_edit_events(app: &mut App, code: KeyCode) {
+    // Confirmation mode
+    if app.confirm_delete.is_some() {
+        match code {
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                let idx = app.edit_event_idx;
+                app.delete_edit_event(idx);
+                app.confirm_delete = None;
+            }
+            _ => {
+                app.confirm_delete = None;
+            }
+        }
+        return;
+    }
+
+    match code {
+        KeyCode::Char('q') | KeyCode::Char('Q') => std::process::exit(0),
+        KeyCode::Esc => {
+            app.screen = Screen::EditDecisions;
+        }
+        KeyCode::Up | KeyCode::Char('k') => app.edit_event_prev(),
+        KeyCode::Down | KeyCode::Char('j') => app.edit_event_next(),
+        KeyCode::Enter => {
+            if !app.edit_events.is_empty() {
+                app.open_event_detail(app.edit_event_idx);
+            }
+        }
+        KeyCode::Char('n') | KeyCode::Char('N') => {
+            let new_event = NamedEvent {
+                id: format!("event_{}", app.edit_events.len() + 1),
+                label: "New Event".into(),
+                description: String::new(),
+                preconditions: vec![],
+                delay: 0,
+                duration: 1,
+                cooldown: 0,
+                effects: vec![],
+                spawns_decision_id: None,
+            };
+            let _ = app.store.upsert_event(&app.schema_name, &new_event);
+            app.edit_events = app.store.list_events(&app.schema_name).unwrap_or_default();
+            app.edit_event_idx = app.edit_events.len().saturating_sub(1);
+        }
+        KeyCode::Char('d') | KeyCode::Char('D') => {
+            if let Some(e) = app.edit_events.get(app.edit_event_idx) {
+                app.confirm_delete = Some(e.label.clone());
+            }
+        }
+        _ => {}
+    }
+}
+
+fn handle_edit_events_detail(app: &mut App, code: KeyCode) {
+    match code {
+        KeyCode::Char('q') | KeyCode::Char('Q') => std::process::exit(0),
+        KeyCode::Esc => {
+            app.save_event_edit();
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            if let Some(ref mut state) = app.edit_event_detail {
+                if state.list_idx > 0 {
+                    state.list_idx -= 1;
+                }
+            }
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            if let Some(ref mut state) = app.edit_event_detail {
+                let max = state.preconditions.len().max(state.effects.len());
+                if state.list_idx + 1 < max {
+                    state.list_idx += 1;
+                }
+            }
+        }
+        KeyCode::Char('a') | KeyCode::Char('A') => {
+            if let Some(ref mut state) = app.edit_event_detail {
+                state.preconditions.push(NamedCondition {
+                    attribute: "attr".into(),
+                    operator: loom_core::ComparisonOp::Gt,
+                    value: 0.0,
+                });
+                state.list_idx = state.preconditions.len() - 1;
+            }
+        }
+        KeyCode::Char('d') | KeyCode::Char('D') => {
+            if let Some(ref mut state) = app.edit_event_detail {
+                if state.list_idx < state.preconditions.len() {
+                    state.preconditions.remove(state.list_idx);
+                    if state.list_idx >= state.preconditions.len() && !state.preconditions.is_empty() {
+                        state.list_idx = state.preconditions.len() - 1;
+                    }
+                }
+            }
+        }
+        KeyCode::Char('e') | KeyCode::Char('E') => {
+            if let Some(ref mut state) = app.edit_event_detail {
+                state.effects.push(NamedEffect {
+                    attribute: Some("attr".into()),
+                    group: None,
+                    delta: 0.0,
+                    scaling: vec![],
+                });
+                state.list_idx = state.preconditions.len() + state.effects.len() - 1;
+            }
+        }
+        KeyCode::Char('f') | KeyCode::Char('F') => {
+            if let Some(ref mut state) = app.edit_event_detail {
+                let eff_idx = state.list_idx.saturating_sub(state.preconditions.len());
+                if eff_idx < state.effects.len() {
+                    state.effects.remove(eff_idx);
+                    if state.list_idx > state.preconditions.len() + state.effects.len() {
+                        state.list_idx = state.preconditions.len().saturating_add(state.effects.len()).saturating_sub(1);
+                    }
                 }
             }
         }

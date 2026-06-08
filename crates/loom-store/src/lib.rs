@@ -18,8 +18,10 @@
 //!
 //! Database location: `~/.loom/loom.db` (unified — schemas + states + timelines in one file).
 
+pub mod event;
 pub mod timeline;
 
+pub use event::{AppliedEventEffect, NamedEvent};
 pub use timeline::{ForkRow, SnapshotRow, TimelineRow, TimelineStore, TimelineSummary};
 
 use loom_core::{
@@ -137,6 +139,33 @@ impl Store {
                 child_timeline_id INTEGER NOT NULL REFERENCES timelines(id),
                 label TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                schema_id INTEGER NOT NULL REFERENCES schemas(id) ON DELETE CASCADE,
+                event_id TEXT NOT NULL,
+                label TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                preconditions_json TEXT NOT NULL DEFAULT '[]',
+                delay INTEGER NOT NULL DEFAULT 0,
+                duration INTEGER NOT NULL DEFAULT 1,
+                cooldown INTEGER NOT NULL DEFAULT 0,
+                effects_json TEXT NOT NULL DEFAULT '[]',
+                spawns_decision_id TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                UNIQUE(schema_id, event_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS active_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timeline_id INTEGER NOT NULL REFERENCES timelines(id) ON DELETE CASCADE,
+                event_template_id INTEGER NOT NULL REFERENCES events(id),
+                phase TEXT NOT NULL DEFAULT 'pending',
+                delay_remaining INTEGER NOT NULL DEFAULT 0,
+                duration_remaining INTEGER NOT NULL DEFAULT 0,
+                cooldown_remaining INTEGER NOT NULL DEFAULT 0,
+                UNIQUE(timeline_id, event_template_id)
             );",
         )?;
         Ok(())
