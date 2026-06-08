@@ -276,6 +276,7 @@ mod tests {
 
         let result = SimulationResult {
             decision_available: true,
+            schedule_aborted: 0,
             final_states: vec![vec![100.0, 50.0], vec![200.0, 30.0]],
             utility_traces: vec![vec![100.0, 120.0], vec![150.0, 140.0]],
             outcome_counts: HashMap::from([(0, 2)]),

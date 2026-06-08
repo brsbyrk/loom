@@ -1,0 +1,80 @@
+{
+  "entries": [
+    {
+      "at_step": 0,
+      "decision": {
+        "id": "take_remote_job",
+        "label": "Take remote job at Nvidia",
+        "preconditions": [
+          {"attribute": "wealth.cash", "operator": "Gt", "value": 15000},
+          {"attribute": "skills.rust", "operator": "Gte", "value": 60}
+        ],
+        "cost": [
+          {"attribute": "wealth.cash", "delta": -5000}
+        ],
+        "outcomes": [
+          {
+            "label": "Great culture fit",
+            "weight": 70,
+            "transform": {
+              "type": "declarative",
+              "effects": [
+                {"attribute": "wealth.cash", "delta": 40000},
+                {"attribute": "skills.rust", "delta": 20},
+                {"attribute": "health.stress", "delta": 15}
+              ]
+            }
+          },
+          {
+            "label": "Toxic environment",
+            "weight": 30,
+            "transform": {
+              "type": "declarative",
+              "effects": [
+                {"attribute": "wealth.cash", "delta": 40000},
+                {"attribute": "health.stress", "delta": 25},
+                {"attribute": "health.physical", "delta": -10}
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "at_step": 12,
+      "required": false,
+      "decision": {
+        "id": "invest_half_cash",
+        "label": "Invest 50% of cash into stocks",
+        "preconditions": [
+          {"attribute": "wealth.cash", "operator": "Gt", "value": 20000}
+        ],
+        "cost": [],
+        "outcomes": [
+          {
+            "label": "Good market",
+            "weight": 60,
+            "transform": {
+              "type": "declarative",
+              "effects": [
+                {"attribute": "wealth.cash", "delta": 0, "scaling": [["wealth.cash", -0.5]]},
+                {"attribute": "wealth.stocks", "delta": 0, "scaling": [["wealth.cash", 0.55]]}
+              ]
+            }
+          },
+          {
+            "label": "Flat market",
+            "weight": 40,
+            "transform": {
+              "type": "declarative",
+              "effects": [
+                {"attribute": "wealth.cash", "delta": 0, "scaling": [["wealth.cash", -0.5]]},
+                {"attribute": "wealth.stocks", "delta": 0, "scaling": [["wealth.cash", 0.5]]}
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

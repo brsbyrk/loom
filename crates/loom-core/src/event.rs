@@ -321,6 +321,67 @@ impl Event {
     }
 }
 
+// ── Decision schedules ──────────────────────────────────────────────────────────────
+
+/// A decision scheduled at a specific absolute step during simulation.
+///
+/// Step 0 fires before any passives tick. Step N fires after the N-th passive tick.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ScheduledDecision {
+    /// Absolute step index in the horizon.
+    pub at_step: usize,
+    /// The decision to apply at this step.
+    pub decision: Decision,
+    /// If `true`, the entire simulation run is marked failed when preconditions
+    /// aren't met at this step. If `false`, the decision is simply skipped.
+    #[serde(default)]
+    pub required: bool,
+}
+
+/// A schedule of decisions to apply at specific steps.
+///
+/// During simulation, at each step the engine checks whether a decision is
+/// scheduled. If multiple decisions share the same step, they're applied in
+/// schedule order. The schedule should be sorted by `at_step` for predictable
+/// behavior.
+///
+/// # Example (JSON)
+///
+/// ```json
+/// {
+///   "entries": [
+///     {"at_step": 0,  "decision": { "id": "take_job", ... }},
+///     {"at_step": 12, "decision": { "id": "invest", ... }, "required": true}
+///   ]
+/// }
+/// ```
+///
+/// This means: take the job at step 0 (start), then invest at step 12.
+/// If the invest preconditions fail at step 12, the run is aborted (required=true).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DecisionSchedule {
+    /// Ordered list of scheduled decisions.
+    pub entries: Vec<ScheduledDecision>,
+}
+
+impl DecisionSchedule {
+    /// Create a schedule from a single decision at step 0.
+    pub fn single(decision: Decision) -> Self {
+        Self {
+            entries: vec![ScheduledDecision {
+                at_step: 0,
+                decision,
+                required: false,
+            }],
+        }
+    }
+
+    /// Get all decisions scheduled at a given step.
+    pub fn at_step(&self, step: usize) -> Vec<&ScheduledDecision> {
+        self.entries.iter().filter(|e| e.at_step == step).collect()
+    }
+}
+
 // ── Tests ────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

@@ -416,6 +416,61 @@ impl NamedGoalVector {
     }
 }
 
+// ── Named decision schedules ────────────────────────────────────────────────────────
+
+use crate::event::{DecisionSchedule, ScheduledDecision};
+
+/// Named version of [`ScheduledDecision`] — uses attribute names, resolved via schema.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct NamedScheduledDecision {
+    /// Absolute step index in the horizon.
+    pub at_step: usize,
+    /// The decision to apply at this step (named form).
+    pub decision: NamedDecision,
+    /// If true, abort the run when preconditions fail.
+    #[serde(default)]
+    pub required: bool,
+}
+
+impl NamedScheduledDecision {
+    pub fn resolve(&self, schema: &AttributeSchema) -> Result<ScheduledDecision, ResolveError> {
+        Ok(ScheduledDecision {
+            at_step: self.at_step,
+            decision: self.decision.resolve(schema)?,
+            required: self.required,
+        })
+    }
+}
+
+/// Named version of [`DecisionSchedule`] — resolved to engine types via schema.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct NamedDecisionSchedule {
+    /// Ordered list of scheduled decisions.
+    pub entries: Vec<NamedScheduledDecision>,
+}
+
+impl NamedDecisionSchedule {
+    /// Resolve to engine-level DecisionSchedule.
+    pub fn resolve(&self, schema: &AttributeSchema) -> Result<DecisionSchedule, ResolveError> {
+        let entries = self
+            .entries
+            .iter()
+            .map(|e| e.resolve(schema))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(DecisionSchedule { entries })
+    }
+
+    /// Convenience: load from JSON file and resolve.
+    pub fn from_path(
+        path: &str,
+        schema: &AttributeSchema,
+    ) -> Result<DecisionSchedule, Box<dyn std::error::Error>> {
+        let named: NamedDecisionSchedule =
+            serde_json::from_str(&std::fs::read_to_string(path)?)?;
+        Ok(named.resolve(schema)?)
+    }
+}
+
 // ── Tests ────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

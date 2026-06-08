@@ -116,16 +116,22 @@ impl PassiveEffect {
 
 /// Raw output from a Monte Carlo simulation.
 ///
-/// This is what the engine returns. The analysis layer (Phase 3) consumes this
+/// This is what the engine returns. The analysis layer consumes this
 /// to produce `DecisionAnalysis` — distributions, sensitivity, Pareto fronts.
 #[derive(Debug, Clone)]
 pub struct SimulationResult {
     /// Whether the decision's preconditions were satisfied. If `false`, no runs
     /// were executed and all other fields are empty.
+    /// For schedules, true if the first scheduled decision's preconditions pass.
     pub decision_available: bool,
 
+    /// Number of runs that were aborted because a `required` scheduled decision's
+    /// preconditions weren't met. Always 0 for single-decision simulations.
+    pub schedule_aborted: usize,
+
     /// Final state at the end of the horizon, per Monte Carlo run.
-    /// `results.final_states[i]` corresponds to run `i`.
+    /// `results.final_states[i]` corresponds to run `i`. Aborted runs produce
+    /// the state at the point of abort.
     pub final_states: Vec<Vec<f64>>,
 
     /// Utility score at each step, per run. `utility_traces[i][j]` is the score
@@ -195,6 +201,7 @@ impl Simulation {
         if !decision.available(initial_state) {
             return SimulationResult {
                 decision_available: false,
+                schedule_aborted: 0,
                 final_states: Vec::new(),
                 utility_traces: Vec::new(),
                 outcome_counts: HashMap::new(),
@@ -254,13 +261,123 @@ impl Simulation {
 
         SimulationResult {
             decision_available: true,
+            schedule_aborted: 0,
             final_states,
             utility_traces,
             outcome_counts,
         }
     }
 
-    /// Weighted random sampling from eligible outcomes.
+    /// Run a schedule of decisions at specified steps during the simulation horizon.
+    ///
+    /// # Flow (per run)
+    ///
+    /// For each step 0..horizon:
+    /// 1. Check if any decisions are scheduled at this step
+    /// 2. For each scheduled decision:
+    ///    a. Check preconditions — if fail and required=true, abort the run
+    ///    b. Apply decision cost
+    ///    c. Sample outcome
+    ///    d. Apply outcome transform
+    ///    e. Clamp state
+    /// 3. Tick passive effects
+    /// 4. Clamp state
+    /// 5. Record utility
+    pub fn run_schedule(
+        &self,
+        initial_state: &DynamicState,
+        schedule: &crate::event::DecisionSchedule,
+        goal: &GoalVector,
+    ) -> SimulationResult {
+        let dim = initial_state.len();
+        assert_eq!(
+            goal.dimension(),
+            dim,
+            "goal dimension {} must match state dimension {}",
+            goal.dimension(),
+            dim
+        );
+
+        let mut rng = StdRng::from_entropy();
+        let mut final_states = Vec::with_capacity(self.monte_carlo_runs);
+        let mut utility_traces = Vec::with_capacity(self.monte_carlo_runs);
+        let mut outcome_counts: HashMap<usize, usize> = HashMap::new();
+        let mut schedule_aborted = 0usize;
+
+        for _run in 0..self.monte_carlo_runs {
+            let mut state: Vec<f64> = initial_state.as_slice().to_vec();
+            let mut run_utility = Vec::with_capacity(self.horizon + 1);
+            let mut aborted = false;
+
+            for step in 0..=self.horizon {
+                // 1. Apply scheduled decisions at this step
+                for sched in schedule.at_step(step) {
+                    // Check preconditions
+                    if !sched.decision.available(&state) {
+                        if sched.required {
+                            aborted = true;
+                            break;
+                        }
+                        // Optional — skip
+                        continue;
+                    }
+
+                    // Apply cost
+                    for cost_effect in &sched.decision.cost {
+                        cost_effect.apply(&mut state);
+                    }
+
+                    // Sample outcome
+                    let outcome_idx =
+                        self.sample_outcome(&sched.decision.outcomes, &state, &mut rng);
+                    *outcome_counts.entry(outcome_idx).or_insert(0) += 1;
+
+                    // Apply outcome transform
+                    sched.decision.outcomes[outcome_idx]
+                        .transform
+                        .apply(&mut state);
+
+                    // Clamp
+                    self.clamp_state(&mut state, initial_state);
+                }
+
+                if aborted {
+                    break;
+                }
+
+                // 2. Tick passives
+                for passive in &self.passives {
+                    if passive.should_fire(&state, step) {
+                        passive.apply(&mut state);
+                    }
+                }
+                self.clamp_state(&mut state, initial_state);
+
+                // 3. Record utility
+                run_utility.push(goal.utility(&state));
+            }
+
+            if aborted {
+                schedule_aborted += 1;
+            }
+            final_states.push(state);
+            utility_traces.push(run_utility);
+        }
+
+        // decision_available: check if the first scheduled decision is available
+        let decision_available = schedule
+            .entries
+            .first()
+            .map_or(true, |s| s.decision.available(initial_state));
+
+        SimulationResult {
+            decision_available,
+            schedule_aborted,
+            final_states,
+            utility_traces,
+            outcome_counts,
+        }
+    }
     ///
     /// Returns the index into `outcomes` that was selected. Uses `condition` guards
     /// to filter the pool (outcomes whose condition fails the current state are excluded).

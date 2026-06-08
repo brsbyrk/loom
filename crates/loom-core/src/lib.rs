@@ -38,13 +38,15 @@ pub mod named;
 
 pub use state::StateVector;
 pub use event::{
-    AttributeEffect, ComparisonOp, Condition, Decision, Event, Outcome, ScriptSource, Transform,
+    AttributeEffect, ComparisonOp, Condition, Decision, DecisionSchedule, Event, Outcome,
+    ScheduledDecision, ScriptSource, Transform,
 };
 pub use schema::{AttributeDef, AttributeSchema, DynamicState, SchemaError};
 pub use distribution::{Distribution, TimeBand};
 pub use scoring::{DecisionAnalysis, GoalVector, Threshold};
 pub use simulation::{Frequency, PassiveEffect, Simulation, SimulationResult};
 pub use named::{
-    NamedCondition, NamedDecision, NamedEffect, NamedFrequency, NamedGoalVector, NamedOutcome,
-    NamedPassiveEffect, NamedTransform, ResolveError,
+    NamedCondition, NamedDecision, NamedDecisionSchedule, NamedEffect, NamedFrequency,
+    NamedGoalVector, NamedOutcome, NamedPassiveEffect, NamedScheduledDecision, NamedTransform,
+    ResolveError,
 };
