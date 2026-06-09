@@ -6,6 +6,8 @@
 use crate::distribution::{Distribution, TimeBand};
 use serde::{Deserialize, Serialize};
 
+use crate::traits::Valuation;
+
 // ── Goal vector ──────────────────────────────────────────────────────────────────────
 
 /// A threshold cliff: when an attribute drops below `min`, utility is penalized.
@@ -97,6 +99,12 @@ impl GoalVector {
     /// Validate that cliffs and weights have the same dimension.
     pub fn dimension(&self) -> usize {
         self.weights.len()
+    }
+}
+
+impl Valuation for GoalVector {
+    fn score(&self, state: &[f64]) -> f64 {
+        self.utility(state)
     }
 }
 

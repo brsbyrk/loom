@@ -35,6 +35,7 @@ pub mod distribution;
 pub mod scoring;
 pub mod simulation;
 pub mod named;
+pub mod traits;
 
 pub use state::StateVector;
 pub use event::{
@@ -45,6 +46,7 @@ pub use schema::{AttributeDef, AttributeSchema, DynamicState, SchemaError};
 pub use distribution::{Distribution, TimeBand};
 pub use scoring::{DecisionAnalysis, GoalVector, Threshold};
 pub use simulation::{Frequency, PassiveEffect, Simulation, SimulationResult};
+pub use traits::{Action, All, Any, OneOf, Predicate, Sequence, Valuation, When};
 pub use named::{
     NamedCondition, NamedDecision, NamedDecisionSchedule, NamedEffect, NamedFrequency,
     NamedGoalVector, NamedOutcome, NamedPassiveEffect, NamedScheduledDecision, NamedTransform,

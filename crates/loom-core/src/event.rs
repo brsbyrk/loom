@@ -5,6 +5,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::traits::{Action, Predicate};
+
 // ── Conditions ──────────────────────────────────────────────────────────────────────
 
 /// Comparison operator for numeric conditions.
@@ -58,6 +60,12 @@ impl Condition {
             ComparisonOp::Gt => attr > self.value,
             ComparisonOp::Gte => attr >= self.value,
         }
+    }
+}
+
+impl Predicate for Condition {
+    fn evaluate(&self, state: &[f64]) -> bool {
+        self.check(state)
     }
 }
 
@@ -122,6 +130,12 @@ impl AttributeEffect {
     /// Apply this effect to a mutable state slice.
     pub fn apply(&self, state: &mut [f64]) {
         state[self.attribute_index] += self.compute_delta(state);
+    }
+}
+
+impl Action for AttributeEffect {
+    fn apply(&self, state: &mut [f64]) {
+        AttributeEffect::apply(self, state)
     }
 }
 
@@ -215,6 +229,12 @@ impl Transform {
                 // For now, this is a no-op.
             }
         }
+    }
+}
+
+impl Action for Transform {
+    fn apply(&self, state: &mut [f64]) {
+        Transform::apply(self, state)
     }
 }
 

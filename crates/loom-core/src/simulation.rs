@@ -18,6 +18,7 @@
 use crate::event::{Decision, Outcome};
 use crate::schema::DynamicState;
 use crate::scoring::GoalVector;
+use crate::traits::{Action, All, Predicate, Sequence, Valuation};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use serde::{Deserialize, Serialize};
@@ -198,8 +199,80 @@ impl Simulation {
             dim
         );
 
+        // Build precondition: All conditions must hold
+        let precond_boxes: Vec<Box<dyn Predicate>> = decision
+            .preconditions
+            .iter()
+            .map(|c| Box::new(c.clone()) as Box<dyn Predicate>)
+            .collect();
+        let precondition = All(precond_boxes);
+
+        // Build cost: apply all cost effects sequentially
+        let cost_boxes: Vec<Box<dyn Action>> = decision
+            .cost
+            .iter()
+            .map(|e| Box::new(e.clone()) as Box<dyn Action>)
+            .collect();
+        let cost = Sequence(cost_boxes);
+
+        // Build outcome condition boxes (must outlive the references)
+        let outcome_cond_boxes: Vec<Option<Box<dyn Predicate>>> = decision
+            .outcomes
+            .iter()
+            .map(|o| {
+                o.condition
+                    .as_ref()
+                    .map(|c| Box::new(c.clone()) as Box<dyn Predicate>)
+            })
+            .collect();
+
+        // Build outcome transform boxes
+        let outcome_transform_boxes: Vec<Box<dyn Action>> = decision
+            .outcomes
+            .iter()
+            .map(|o| Box::new(o.transform.clone()) as Box<dyn Action>)
+            .collect();
+
+        // Build branches slice with references to the boxes
+        let branches: Vec<(f64, Option<&dyn Predicate>, &dyn Action)> = decision
+            .outcomes
+            .iter()
+            .enumerate()
+            .map(|(i, o)| {
+                (
+                    o.weight,
+                    outcome_cond_boxes[i]
+                        .as_ref()
+                        .map(|b| b.as_ref() as &dyn Predicate),
+                    outcome_transform_boxes[i].as_ref() as &dyn Action,
+                )
+            })
+            .collect();
+
+        self.run_dynamic(initial_state, &precondition, &cost, &branches, goal)
+    }
+
+    /// Run the Monte Carlo simulation using trait objects.
+    ///
+    /// This is the trait-based entry point. [`Self::run`] delegates here after
+    /// wrapping concrete types in trait objects.
+    ///
+    /// # Parameters
+    ///
+    /// * `precondition` — must evaluate to `true` for the run to proceed
+    /// * `cost` — deterministic action applied before outcome sampling
+    /// * `outcomes` — weighted branches: `(weight, optional_guard, action)`
+    /// * `valuation` — scores state after each step
+    pub fn run_dynamic(
+        &self,
+        initial_state: &DynamicState,
+        precondition: &dyn Predicate,
+        cost: &dyn Action,
+        outcomes: &[(f64, Option<&dyn Predicate>, &dyn Action)],
+        valuation: &dyn Valuation,
+    ) -> SimulationResult {
         // Check preconditions
-        if !decision.available(initial_state) {
+        if !precondition.evaluate(initial_state) {
             return SimulationResult {
                 decision_available: false,
                 schedule_aborted: 0,
@@ -218,19 +291,15 @@ impl Simulation {
             // 1. Clone initial state
             let mut state: Vec<f64> = initial_state.as_slice().to_vec();
 
-            // 2. Apply decision cost
-            for cost_effect in &decision.cost {
-                cost_effect.apply(&mut state);
-            }
+            // 2. Apply cost
+            cost.apply(&mut state);
 
             // 3. Sample outcome
-            let outcome_idx = self.sample_outcome(&decision.outcomes, &state, &mut rng);
+            let outcome_idx = self.sample_outcome_dynamic(outcomes, &state, &mut rng);
             *outcome_counts.entry((0, outcome_idx)).or_insert(0) += 1;
 
             // 4. Apply outcome transform
-            decision.outcomes[outcome_idx]
-                .transform
-                .apply(&mut state);
+            outcomes[outcome_idx].2.apply(&mut state);
 
             // 5. Clamp after decision
             self.clamp_state(&mut state, initial_state);
@@ -239,7 +308,7 @@ impl Simulation {
             let mut run_utility = Vec::with_capacity(self.horizon + 1);
 
             // Record utility at step 0 (post-decision, pre-passives)
-            run_utility.push(goal.utility(&state));
+            run_utility.push(valuation.score(&state));
 
             for step in 1..=self.horizon {
                 // Tick passive effects
@@ -253,7 +322,7 @@ impl Simulation {
                 self.clamp_state(&mut state, initial_state);
 
                 // Record utility
-                run_utility.push(goal.utility(&state));
+                run_utility.push(valuation.score(&state));
             }
 
             final_states.push(state);
@@ -267,6 +336,46 @@ impl Simulation {
             utility_traces,
             outcome_counts,
         }
+    }
+
+    /// Sample an outcome index from trait-object based outcome branches.
+    fn sample_outcome_dynamic(
+        &self,
+        outcomes: &[(f64, Option<&dyn Predicate>, &dyn Action)],
+        state: &[f64],
+        rng: &mut StdRng,
+    ) -> usize {
+        // Build sampling pool: only eligible outcomes
+        let pool: Vec<(usize, f64)> = outcomes
+            .iter()
+            .enumerate()
+            .filter(|(_, (_, guard, _))| guard.map_or(true, |g| g.evaluate(state)))
+            .map(|(i, (w, _, _))| (i, *w))
+            .collect();
+
+        if pool.is_empty() {
+            return rng.gen_range(0..outcomes.len());
+        }
+
+        let total_weight: f64 = pool.iter().map(|(_, w)| w).sum();
+
+        if total_weight <= 0.0 {
+            let idx = rng.gen_range(0..pool.len());
+            return pool[idx].0;
+        }
+
+        let roll: f64 = rng.r#gen::<f64>() * total_weight;
+        let mut cumulative = 0.0;
+
+        for (idx, weight) in &pool {
+            cumulative += weight;
+            if roll < cumulative {
+                return *idx;
+            }
+        }
+
+        // Fallback (floating-point edge case)
+        pool.last().map(|(i, _)| *i).unwrap_or(0)
     }
 
     /// Run a schedule of decisions at specified steps during the simulation horizon.
