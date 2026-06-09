@@ -44,7 +44,7 @@ pub use event::{
     ScheduledDecision, ScriptSource, Transform,
 };
 pub use events::{determine_firing, ResolvedEvent};
-pub use schema::{AttributeDef, AttributeSchema, DynamicState, SchemaError};
+pub use schema::{AttributeDef, AttributeKind, AttributeSchema, DynamicState, SchemaError};
 pub use distribution::{Distribution, TimeBand};
 pub use scoring::{DecisionAnalysis, GoalVector, Threshold};
 pub use simulation::{Frequency, PassiveEffect, Simulation, SimulationResult};

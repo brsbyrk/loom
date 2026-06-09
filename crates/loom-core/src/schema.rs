@@ -10,11 +10,15 @@
 //! {
 //!   "version": 1,
 //!   "attributes": [
-//!     {"name": "wealth.cash", "group": "wealth", "unit": "$"},
-//!     {"name": "health.physical", "group": "health", "unit": "pts", "bounds": [0, 100]}
+//!     {"name": "wealth.cash", "group": "wealth", "unit": "$", "kind": "continuous"},
+//!     {"name": "health.physical", "group": "health", "unit": "pts", "bounds": [0, 100]},
+//!     {"name": "trait_ambitious", "kind": "boolean"}
 //!   ]
 //! }
 //! ```
+//!
+//! `kind` defaults to `"continuous"` when omitted. Boolean attributes are
+//! treated as 0.0/1.0 flags — the engine operates on f64 regardless.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -36,6 +40,21 @@ pub struct AttributeSchema {
 
 fn default_version() -> u32 {
     1
+}
+
+/// Whether an attribute is a continuous value (default) or a boolean flag.
+///
+/// The engine operates on `f64` regardless — this is metadata for the TUI and
+/// config layer. Boolean attributes are conventionally 0.0 (false) or 1.0 (true)
+/// and pair naturally with `ComparisonOp::Eq`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AttributeKind {
+    /// Unbounded real value (default).
+    #[default]
+    Continuous,
+    /// Boolean flag: 0.0 = false, 1.0 = true.
+    Boolean,
 }
 
 /// One attribute slot in the state vector.
@@ -62,6 +81,11 @@ pub struct AttributeDef {
     /// Optional human-readable description.
     #[serde(default)]
     pub description: Option<String>,
+
+    /// Value kind — continuous (default) or boolean.
+    /// The engine ignores this; it is metadata for the TUI and config layer.
+    #[serde(default)]
+    pub kind: AttributeKind,
 }
 
 impl AttributeDef {
@@ -255,6 +279,7 @@ mod tests {
                     unit: Some("$".into()),
                     bounds: None,
                     description: None,
+                    kind: AttributeKind::Continuous,
                 },
                 AttributeDef {
                     name: "health.physical".into(),
@@ -262,6 +287,7 @@ mod tests {
                     unit: Some("pts".into()),
                     bounds: Some((0.0, 100.0)),
                     description: None,
+                    kind: AttributeKind::Continuous,
                 },
                 AttributeDef {
                     name: "time_free".into(),
@@ -269,6 +295,7 @@ mod tests {
                     unit: Some("hrs".into()),
                     bounds: None,
                     description: None,
+                    kind: AttributeKind::Continuous,
                 },
             ],
         }
