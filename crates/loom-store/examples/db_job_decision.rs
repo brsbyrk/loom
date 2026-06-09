@@ -58,6 +58,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         horizon: 24,
         monte_carlo_runs: 1000,
         passives,
+        events: Vec::new(),
     };
 
     let analysis = sim.run_and_analyze(&state, &decision, &goal);

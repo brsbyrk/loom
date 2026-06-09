@@ -5,10 +5,12 @@
 //! independent of `loom-core`'s Event type (which is engine-internal).
 //! Active event instances live in `active_events` (per-timeline).
 
-use loom_core::{AttributeSchema, NamedCondition, NamedEffect};
+use loom_core::{AttributeSchema, NamedCondition, NamedEffect, ResolveError};
+use loom_core::traits::{Action, All, Any, Predicate};
+use loom_core::ResolvedEvent;
 use rusqlite::{params, Result as SqlResult};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 // ── Event template ────────────────────────────────────────────────────────────
 
@@ -87,6 +89,90 @@ pub struct AppliedEventEffect {
     pub spawned_decision_id: Option<String>,
     /// Human-readable description.
     pub description: String,
+}
+
+// ── Resolve event templates to engine core ───────────────────────────────────
+
+/// Resolve a slice of [`NamedEvent`]s into [`ResolvedEvent`]s suitable for the
+/// pure [`loom_core::determine_firing`] function.
+///
+/// This resolves all attribute names to indices, expands group effects, bakes
+/// precondition modes (All/Any) into compositors, and replaces string event IDs
+/// with positional indices for O(1) cross-reference lookups.
+pub fn resolve_events(
+    named_events: &[NamedEvent],
+    schema: &AttributeSchema,
+) -> Result<Vec<ResolvedEvent>, ResolveError> {
+    // Map named event IDs to positional indices
+    let id_to_idx: HashMap<&str, usize> = named_events
+        .iter()
+        .enumerate()
+        .map(|(i, ne)| (ne.id.as_str(), i))
+        .collect();
+
+    named_events
+        .iter()
+        .enumerate()
+        .map(|(idx, ne)| {
+            // Resolve preconditions to Predicate trait objects
+            let conditions: Vec<Box<dyn Predicate>> = ne
+                .preconditions
+                .iter()
+                .map(|nc| nc.resolve(schema).map(|c| Box::new(c) as Box<dyn Predicate>))
+                .collect::<Result<Vec<_>, _>>()?;
+
+            let precondition: Box<dyn Predicate> = match ne.precondition_mode {
+                PreconditionMode::All => Box::new(All(conditions)),
+                PreconditionMode::Any => Box::new(Any(conditions)),
+            };
+
+            // Resolve effects to Action trait objects
+            let effects: Vec<Box<dyn Action>> = ne
+                .effects
+                .iter()
+                .flat_map(|neff| neff.resolve(schema).unwrap_or_default())
+                .map(|ae| Box::new(ae) as Box<dyn Action>)
+                .collect();
+
+            // Cross-reference string event IDs → positional indices
+            let triggered_by: Vec<usize> = ne
+                .triggered_by
+                .iter()
+                .filter_map(|id| id_to_idx.get(id.as_str()).copied())
+                .collect();
+
+            let suppressed_by: Vec<usize> = ne
+                .suppressed_by
+                .iter()
+                .filter_map(|id| id_to_idx.get(id.as_str()).copied())
+                .collect();
+
+            let triggers_event_id = ne
+                .triggers_event_id
+                .as_deref()
+                .and_then(|id| id_to_idx.get(id).copied());
+
+            let triggers_on_resolve_id = ne
+                .triggers_on_resolve
+                .as_deref()
+                .and_then(|id| id_to_idx.get(id).copied());
+
+            Ok(ResolvedEvent {
+                id: idx,
+                label: ne.label.clone(),
+                precondition,
+                effects,
+                triggered_by,
+                suppressed_by,
+                priority: ne.priority,
+                delay: ne.delay,
+                duration: ne.duration,
+                cooldown: ne.cooldown,
+                triggers_event_id,
+                triggers_on_resolve_id,
+            })
+        })
+        .collect()
 }
 
 // ── Event CRUD on Store ─────────────────────────────────────────────────────
@@ -320,84 +406,78 @@ impl crate::timeline::TimelineStore<'_> {
         let schema_id = self.get_schema_id_by_timeline(timeline_id)?;
         let events = self.load_event_templates(schema_id)?;
 
-        // 2. Load existing active events for this timeline
-        let mut actives = self.load_active_events(timeline_id)?;
-        let active_template_ids: Vec<i64> = actives.iter().map(|a| a.event_template_id).collect();
+        // 2. Resolve event templates to engine-core ResolvedEvents
+        let named: Vec<NamedEvent> = events
+            .iter()
+            .map(|t| NamedEvent {
+                id: t.event_id.clone(),
+                label: t.label.clone(),
+                description: String::new(),
+                preconditions: t.preconditions.clone(),
+                delay: t.delay,
+                duration: t.duration,
+                cooldown: t.cooldown,
+                effects: t.effects.clone(),
+                spawns_decision_id: t.spawns_decision_id.clone(),
+                triggered_by: t.triggered_by.clone(),
+                suppressed_by: t.suppressed_by.clone(),
+                triggers_event_id: t.triggers_event_id.clone(),
+                triggers_on_resolve: t.triggers_on_resolve.clone(),
+                priority: t.priority,
+                precondition_mode: t.precondition_mode.clone(),
+            })
+            .collect();
 
-        // 3. Collect which events are firing or resolving this step (for chains)
+        let resolved = resolve_events(&named, schema).unwrap_or_default();
+
+        // 3. Build row_id → resolved index map
+        let row_id_to_idx: HashMap<i64, usize> =
+            events.iter().enumerate().map(|(i, t)| (t.row_id, i)).collect();
+
+        // 4. Load existing active events for this timeline
+        let mut actives = self.load_active_events(timeline_id)?;
+
+        // 5. Build active_ids set (events currently in any lifecycle phase)
+        let active_ids: HashSet<usize> = actives
+            .iter()
+            .filter_map(|a| row_id_to_idx.get(&a.event_template_id).copied())
+            .collect();
+
+        // 6. Collect which events are firing or resolving this step (for chains)
         let mut firing_this_step: HashSet<String> = HashSet::new();
         let mut resolving_this_step: HashSet<String> = HashSet::new();
 
-        // First pass: determine what fires
-        let mut to_activate: Vec<(i32, &EventTemplateRow)> = Vec::new();
+        // Chain tracking from previous step — not yet persisted across calls.
+        // TODO: store fired_prev / resolved_prev on timeline for cross-step chaining.
+        let fired_prev: HashSet<usize> = HashSet::new();
+        let resolved_prev: HashSet<usize> = HashSet::new();
 
-        for evt_tmpl in &events {
-            if active_template_ids.contains(&evt_tmpl.row_id) {
-                continue; // Already active
-            }
+        // 7. Pure firing decision via the shared engine core
+        let firing_order = loom_core::determine_firing(
+            &resolved,
+            current_values,
+            &active_ids,
+            &fired_prev,
+            &resolved_prev,
+        );
 
-            // Suppression check
-            let suppressed = evt_tmpl.suppressed_by.iter().any(|supp_id| {
-                actives.iter().any(|a| {
-                    events
-                        .iter()
-                        .any(|e| e.row_id == a.event_template_id && e.event_id == *supp_id)
-                })
-            });
-            if suppressed {
-                continue;
-            }
+        // 8. Process firing events in priority order (already sorted by determine_firing)
+        for &evt_idx in &firing_order {
+            let evt = &resolved[evt_idx];
+            let evt_tmpl = &events[evt_idx];
 
-            // Trigger path
-            let triggered = evt_tmpl.triggered_by.iter().any(|trigger_id| {
-                firing_this_step.contains(trigger_id)
-                    || resolving_this_step.contains(trigger_id)
-            });
-
-            // State path
-            let preconditions_met = if evt_tmpl.precondition_mode == PreconditionMode::All {
-                evt_tmpl
-                    .preconditions
-                    .iter()
-                    .all(|nc| {
-                        nc.resolve(schema)
-                            .map(|c| c.check(current_values))
-                            .unwrap_or(false)
-                    })
-            } else {
-                evt_tmpl.preconditions.is_empty()
-                    || evt_tmpl
-                        .preconditions
-                        .iter()
-                        .any(|nc| {
-                            nc.resolve(schema)
-                                .map(|c| c.check(current_values))
-                                .unwrap_or(false)
-                        })
-            };
-
-            if triggered || preconditions_met {
-                to_activate.push((evt_tmpl.priority, evt_tmpl));
-            }
-        }
-
-        // Sort by priority descending, then original row_id order
-        to_activate.sort_by_key(|(prio, evt)| (-prio, evt.row_id));
-
-        // Process in priority order
-        for (_prio, evt_tmpl) in &to_activate {
-            if evt_tmpl.delay > 0 {
+            if evt.delay > 0 {
                 // Create pending entry
                 self.create_active_event(
                     timeline_id,
                     evt_tmpl.row_id,
                     "pending",
-                    evt_tmpl.delay,
-                    evt_tmpl.duration,
-                    evt_tmpl.cooldown,
+                    evt.delay,
+                    evt.duration,
+                    evt.cooldown,
                 )?;
                 results.push(AppliedEventEffect {
-                    event_label: evt_tmpl.label.clone(),
+                    event_label: evt.label.clone(),
                     phase: "pending".into(),
                     event_id: evt_tmpl.event_id.clone(),
                     delta: 0.0,
@@ -405,7 +485,7 @@ impl crate::timeline::TimelineStore<'_> {
                     spawned_decision_id: None,
                     description: format!(
                         "{} triggered, will fire in {} steps",
-                        evt_tmpl.label, evt_tmpl.delay
+                        evt.label, evt.delay
                     ),
                 });
             } else {
@@ -415,22 +495,24 @@ impl crate::timeline::TimelineStore<'_> {
                     evt_tmpl.row_id,
                     "active",
                     0,
-                    evt_tmpl.duration,
-                    evt_tmpl.cooldown,
+                    evt.duration,
+                    evt.cooldown,
                 )?;
 
                 firing_this_step.insert(evt_tmpl.event_id.clone());
 
-                // Chain: if this event fires, queue its triggers_event_id
-                if let Some(ref chain_id) = evt_tmpl.triggers_event_id {
-                    firing_this_step.insert(chain_id.clone());
+                // Forward chain on fire — queue for next step's fired_prev
+                if let Some(chain_idx) = evt.triggers_event_id {
+                    if let Some(chain_tmpl) = events.get(chain_idx) {
+                        firing_this_step.insert(chain_tmpl.event_id.clone());
+                    }
                 }
 
                 for (attr_name, delta) in
                     self.resolve_effects(&evt_tmpl.effects, current_values, schema)
                 {
                     results.push(AppliedEventEffect {
-                        event_label: evt_tmpl.label.clone(),
+                        event_label: evt.label.clone(),
                         phase: "active".into(),
                         event_id: evt_tmpl.event_id.clone(),
                         delta,
@@ -438,7 +520,7 @@ impl crate::timeline::TimelineStore<'_> {
                         spawned_decision_id: evt_tmpl.spawns_decision_id.clone(),
                         description: format!(
                             "{} fired — {}: {}",
-                            evt_tmpl.label,
+                            evt.label,
                             attr_name,
                             if delta >= 0.0 {
                                 format!("+{:.1}", delta)

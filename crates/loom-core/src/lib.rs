@@ -30,6 +30,7 @@
 
 pub mod state;
 pub mod event;
+pub mod events;
 pub mod schema;
 pub mod distribution;
 pub mod scoring;
@@ -42,6 +43,7 @@ pub use event::{
     AttributeEffect, ComparisonOp, Condition, Decision, DecisionSchedule, Event, Outcome,
     ScheduledDecision, ScriptSource, Transform,
 };
+pub use events::{determine_firing, ResolvedEvent};
 pub use schema::{AttributeDef, AttributeSchema, DynamicState, SchemaError};
 pub use distribution::{Distribution, TimeBand};
 pub use scoring::{DecisionAnalysis, GoalVector, Threshold};

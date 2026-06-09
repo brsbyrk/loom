@@ -16,13 +16,14 @@
 //! ```
 
 use crate::event::{Decision, Outcome};
+use crate::events::ResolvedEvent;
 use crate::schema::DynamicState;
 use crate::scoring::GoalVector;
 use crate::traits::{Action, All, Predicate, Sequence, Valuation};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 // ── Passive effects ──────────────────────────────────────────────────────────────────
 
@@ -157,15 +158,22 @@ pub struct Simulation {
 
     /// Passive effects that tick forward each step.
     pub passives: Vec<PassiveEffect>,
+
+    /// Resolved event templates — checked each step via [`crate::determine_firing`].
+    /// Events fire when their preconditions are met and may chain-trigger or suppress
+    /// other events.
+    #[allow(dead_code)]
+    pub events: Vec<ResolvedEvent>,
 }
 
 impl Simulation {
-    /// Create a new simulation with default empty passives.
+    /// Create a new simulation with default empty passives and events.
     pub fn new(horizon: usize, monte_carlo_runs: usize) -> Self {
         Self {
             horizon,
             monte_carlo_runs,
             passives: Vec::new(),
+            events: Vec::new(),
         }
     }
 
@@ -307,6 +315,11 @@ impl Simulation {
             // 6. Forward simulation
             let mut run_utility = Vec::with_capacity(self.horizon + 1);
 
+            // Event tracking state (active suppression and chain triggers)
+            let mut active_ids: HashSet<usize> = HashSet::new();
+            let mut fired_prev: HashSet<usize> = HashSet::new();
+            let resolved_prev: HashSet<usize> = HashSet::new(); // no duration tracking yet
+
             // Record utility at step 0 (post-decision, pre-passives)
             run_utility.push(valuation.score(&state));
 
@@ -320,6 +333,34 @@ impl Simulation {
 
                 // Clamp after passives
                 self.clamp_state(&mut state, initial_state);
+
+                // --- Event firing (pure core shared with TimelineStore) ---
+                if !self.events.is_empty() {
+                    let firing_order =
+                        crate::events::determine_firing(
+                            &self.events,
+                            &state,
+                            &active_ids,
+                            &fired_prev,
+                            &resolved_prev,
+                        );
+
+                    let mut fired_this_step: HashSet<usize> = HashSet::new();
+                    for &evt_idx in &firing_order {
+                        let evt = &self.events[evt_idx];
+                        for action in &evt.effects {
+                            action.apply(&mut state);
+                        }
+                        fired_this_step.insert(evt_idx);
+                    }
+
+                    // Clamp after event effects
+                    self.clamp_state(&mut state, initial_state);
+
+                    // Update tracking for next step
+                    fired_prev = fired_this_step;
+                    active_ids = fired_prev.clone(); // events remain active for one step
+                }
 
                 // Record utility
                 run_utility.push(valuation.score(&state));

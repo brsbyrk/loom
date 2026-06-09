@@ -452,6 +452,7 @@ impl App {
             horizon: self.sim_config.horizon,
             monte_carlo_runs: self.sim_config.runs,
             passives: self.passives.clone(),
+            events: Vec::new(),
         };
         let analysis = sim.run_and_analyze(&self.current_state, decision, &self.goal);
         self.last_decision = Some(decision.clone());

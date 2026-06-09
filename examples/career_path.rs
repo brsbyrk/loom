@@ -53,6 +53,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         horizon: 24,
         monte_carlo_runs: 1000,
         passives,
+        events: Vec::new(),
     };
 
     let result = sim.run_schedule(&state, &schedule, &goal);
