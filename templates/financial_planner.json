@@ -1,0 +1,473 @@
+{
+  "name": "Financial Planner",
+  "description": "Financial planning simulation — investments, debt, income, and market events",
+  "schema": {
+    "version": 1,
+    "attributes": [
+      {"name": "cash", "unit": "$", "bounds": [0, 500000], "description": "Liquid cash on hand"},
+      {"name": "stocks", "unit": "$", "bounds": [0, 500000], "description": "Stock portfolio value"},
+      {"name": "bonds", "unit": "$", "bounds": [0, 500000], "description": "Bond holdings value"},
+      {"name": "real_estate", "unit": "$", "bounds": [0, 1000000], "description": "Real estate equity value"},
+      {"name": "debt", "unit": "$", "bounds": [0, 200000], "description": "Total outstanding debt"},
+      {"name": "monthly_income", "unit": "$", "bounds": [0, 30000], "description": "Recurring monthly income"},
+      {"name": "monthly_expenses", "unit": "$", "bounds": [0, 20000], "description": "Recurring monthly expenses"},
+      {"name": "credit_score", "unit": "pts", "bounds": [300, 850], "description": "Credit score"},
+      {"name": "risk_tolerance", "unit": "pts", "bounds": [0, 100], "description": "Willingness to take financial risk"},
+      {"name": "retirement_savings", "unit": "$", "bounds": [0, 1000000], "description": "Total retirement account value"}
+    ]
+  },
+  "decisions": [
+    {
+      "id": "invest_index_fund",
+      "label": "Invest in index fund",
+      "preconditions": [
+        {"attribute": "cash", "operator": "Gt", "value": 10000},
+        {"attribute": "debt", "operator": "Lt", "value": 50000}
+      ],
+      "cost": [
+        {"attribute": "cash", "delta": -10000}
+      ],
+      "outcomes": [
+        {
+          "label": "Bull market",
+          "weight": 60,
+          "transform": {
+            "type": "declarative",
+            "effects": [
+              {"attribute": "stocks", "delta": 14000},
+              {"attribute": "risk_tolerance", "delta": 5}
+            ]
+          }
+        },
+        {
+          "label": "Bear market",
+          "weight": 30,
+          "transform": {
+            "type": "declarative",
+            "effects": [
+              {"attribute": "stocks", "delta": 7000},
+              {"attribute": "risk_tolerance", "delta": -5}
+            ]
+          }
+        },
+        {
+          "label": "Market crash",
+          "weight": 10,
+          "transform": {
+            "type": "declarative",
+            "effects": [
+              {"attribute": "stocks", "delta": 3000},
+              {"attribute": "risk_tolerance", "delta": -15}
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "buy_rental_property",
+      "label": "Buy rental property",
+      "preconditions": [
+        {"attribute": "cash", "operator": "Gt", "value": 50000},
+        {"attribute": "credit_score", "operator": "Gte", "value": 680}
+      ],
+      "cost": [
+        {"attribute": "cash", "delta": -40000},
+        {"attribute": "debt", "delta": 150000}
+      ],
+      "outcomes": [
+        {
+          "label": "Great tenants",
+          "weight": 50,
+          "transform": {
+            "type": "declarative",
+            "effects": [
+              {"attribute": "real_estate", "delta": 20000},
+              {"attribute": "monthly_income", "delta": 2000}
+            ]
+          }
+        },
+        {
+          "label": "Mediocre tenants",
+          "weight": 30,
+          "transform": {
+            "type": "declarative",
+            "effects": [
+              {"attribute": "real_estate", "delta": 5000},
+              {"attribute": "monthly_income", "delta": 500}
+            ]
+          }
+        },
+        {
+          "label": "Vacancy nightmare",
+          "weight": 20,
+          "transform": {
+            "type": "declarative",
+            "effects": [
+              {"attribute": "real_estate", "delta": -10000},
+              {"attribute": "monthly_expenses", "delta": 500},
+              {"attribute": "credit_score", "delta": -20}
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "pay_off_debt",
+      "label": "Pay off debt aggressively",
+      "preconditions": [
+        {"attribute": "debt", "operator": "Gt", "value": 5000},
+        {"attribute": "cash", "operator": "Gt", "value": 20000}
+      ],
+      "cost": [
+        {"attribute": "cash", "delta": -15000}
+      ],
+      "outcomes": [
+        {
+          "label": "Debt substantially reduced",
+          "weight": 80,
+          "transform": {
+            "type": "declarative",
+            "effects": [
+              {"attribute": "debt", "delta": -15000},
+              {"attribute": "credit_score", "delta": 25},
+              {"attribute": "monthly_expenses", "delta": -200}
+            ]
+          }
+        },
+        {
+          "label": "Missed opportunity cost",
+          "weight": 20,
+          "transform": {
+            "type": "declarative",
+            "effects": [
+              {"attribute": "debt", "delta": -12000},
+              {"attribute": "credit_score", "delta": 15}
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "start_side_business",
+      "label": "Start a side business",
+      "preconditions": [
+        {"attribute": "cash", "operator": "Gt", "value": 15000},
+        {"attribute": "risk_tolerance", "operator": "Gte", "value": 40}
+      ],
+      "cost": [
+        {"attribute": "cash", "delta": -8000}
+      ],
+      "outcomes": [
+        {
+          "label": "Thriving business",
+          "weight": 20,
+          "transform": {
+            "type": "declarative",
+            "effects": [
+              {"attribute": "monthly_income", "delta": 3000},
+              {"attribute": "risk_tolerance", "delta": 10}
+            ]
+          }
+        },
+        {
+          "label": "Modest success",
+          "weight": 40,
+          "transform": {
+            "type": "declarative",
+            "effects": [
+              {"attribute": "monthly_income", "delta": 800},
+              {"attribute": "risk_tolerance", "delta": 3}
+            ]
+          }
+        },
+        {
+          "label": "Failed venture",
+          "weight": 40,
+          "transform": {
+            "type": "declarative",
+            "effects": [
+              {"attribute": "monthly_income", "delta": -200},
+              {"attribute": "risk_tolerance", "delta": -10},
+              {"attribute": "credit_score", "delta": -10}
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "take_sabbatical",
+      "label": "Take a career sabbatical",
+      "preconditions": [
+        {"attribute": "cash", "operator": "Gt", "value": 30000},
+        {"attribute": "monthly_income", "operator": "Gt", "value": 4000}
+      ],
+      "cost": [],
+      "outcomes": [
+        {
+          "label": "Recharged and focused",
+          "weight": 50,
+          "transform": {
+            "type": "declarative",
+            "effects": [
+              {"attribute": "monthly_income", "delta": 2000},
+              {"attribute": "risk_tolerance", "delta": 10}
+            ]
+          }
+        },
+        {
+          "label": "Struggle to return",
+          "weight": 30,
+          "transform": {
+            "type": "declarative",
+            "effects": [
+              {"attribute": "monthly_income", "delta": -1000},
+              {"attribute": "cash", "delta": -10000}
+            ]
+          }
+        },
+        {
+          "label": "Permanent career shift",
+          "weight": 20,
+          "transform": {
+            "type": "declarative",
+            "effects": [
+              {"attribute": "monthly_income", "delta": -500},
+              {"attribute": "risk_tolerance", "delta": 15},
+              {"attribute": "retirement_savings", "delta": -5000}
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "sell_or_hold",
+      "label": "React to the market correction",
+      "preconditions": [],
+      "cost": [],
+      "outcomes": [
+        {
+          "label": "Sell everything",
+          "weight": 30.0,
+          "transform": {
+            "type": "declarative",
+            "effects": [
+              {"attribute": "cash", "delta": 10000.0},
+              {"attribute": "stocks", "delta": -15000.0}
+            ]
+          }
+        },
+        {
+          "label": "Hold steady",
+          "weight": 50.0,
+          "transform": {
+            "type": "declarative",
+            "effects": []
+          }
+        },
+        {
+          "label": "Buy the dip",
+          "weight": 20.0,
+          "transform": {
+            "type": "declarative",
+            "effects": [
+              {"attribute": "cash", "delta": -5000.0},
+              {"attribute": "stocks", "delta": 5000.0}
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "passives": [
+    {
+      "id": "salary",
+      "label": "Monthly salary deposit",
+      "frequency": {"type": "everystep"},
+      "effects": [
+        {"attribute": "cash", "delta": 5000}
+      ]
+    },
+    {
+      "id": "living_expenses",
+      "label": "Monthly living expenses",
+      "frequency": {"type": "everystep"},
+      "effects": [
+        {"attribute": "cash", "delta": -3000}
+      ]
+    },
+    {
+      "id": "debt_interest",
+      "label": "Debt interest accrual",
+      "frequency": {"type": "everystep"},
+      "effects": [
+        {"attribute": "debt", "delta": 150},
+        {"attribute": "cash", "delta": -200}
+      ]
+    },
+    {
+      "id": "stock_dividends",
+      "label": "Stock dividends",
+      "frequency": {"type": "everystep"},
+      "effects": [
+        {"attribute": "cash", "delta": 200}
+      ]
+    },
+    {
+      "id": "retirement_contribution",
+      "label": "Automatic retirement contribution",
+      "frequency": {"type": "everystep"},
+      "effects": [
+        {"attribute": "cash", "delta": -500},
+        {"attribute": "retirement_savings", "delta": 500}
+      ]
+    }
+  ],
+  "goals": {
+    "default": {
+      "weights": {
+        "cash": 0.8,
+        "stocks": 0.6,
+        "bonds": 0.3,
+        "real_estate": 0.4,
+        "debt": -1.5,
+        "monthly_income": 0.6,
+        "monthly_expenses": -0.5,
+        "credit_score": 0.4,
+        "risk_tolerance": 0.2,
+        "retirement_savings": 0.7
+      },
+      "cliffs": {
+        "debt": {"min": 50000.0, "penalty": 1.5},
+        "cash": {"min": 1000.0, "penalty": 0.8}
+      }
+    }
+  },
+  "events": [
+    {
+      "id": "market_correction",
+      "label": "Stock market correction",
+      "description": "The market drops sharply over several weeks",
+      "preconditions": [
+        {"attribute": "stocks", "operator": "Gt", "value": 5000.0}
+      ],
+      "delay": 2,
+      "duration": 3,
+      "cooldown": 24,
+      "priority": 20,
+      "effects": [
+        {"attribute": "stocks", "delta": -1500.0}
+      ],
+      "spawns_decision_id": "sell_or_hold",
+      "triggers_event_id": "panic_selling",
+      "triggers_on_resolve": "regulatory_volatility"
+    },
+    {
+      "id": "panic_selling",
+      "label": "Panic selling",
+      "description": "Investors panic and dump their positions — cascading losses",
+      "triggered_by": ["market_correction"],
+      "suppressed_by": ["emergency_bailout"],
+      "priority": 15,
+      "delay": 1,
+      "duration": 2,
+      "cooldown": 36,
+      "effects": [
+        {"attribute": "stocks", "delta": -2000.0}
+      ],
+      "triggers_event_id": "margin_call"
+    },
+    {
+      "id": "margin_call",
+      "label": "Margin call",
+      "description": "Your brokerage demands more collateral — triggered by panic or high debt",
+      "precondition_mode": "any",
+      "preconditions": [
+        {"attribute": "debt", "operator": "Gt", "value": 50000.0}
+      ],
+      "triggered_by": ["panic_selling"],
+      "priority": 10,
+      "delay": 0,
+      "duration": 1,
+      "cooldown": 24,
+      "effects": [
+        {"attribute": "cash", "delta": -10000.0},
+        {"attribute": "debt", "delta": 15000.0},
+        {"attribute": "credit_score", "delta": -30.0}
+      ]
+    },
+    {
+      "id": "regulatory_volatility",
+      "label": "Regulatory volatility",
+      "description": "New regulations introduced after the crash stabilize some assets but disrupt others",
+      "triggered_by": ["market_correction"],
+      "delay": 1,
+      "duration": 2,
+      "cooldown": 48,
+      "effects": [
+        {"attribute": "bonds", "delta": 5000.0},
+        {"attribute": "stocks", "delta": -1000.0},
+        {"attribute": "monthly_expenses", "delta": 150.0}
+      ]
+    },
+    {
+      "id": "emergency_bailout",
+      "label": "Emergency bailout",
+      "description": "Central bank intervenes — stabilizes markets but increases national debt concerns",
+      "precondition_mode": "any",
+      "preconditions": [
+        {"attribute": "credit_score", "operator": "Gt", "value": 650.0}
+      ],
+      "triggered_by": ["interest_rate_hike"],
+      "priority": 25,
+      "delay": 1,
+      "duration": 2,
+      "cooldown": 60,
+      "effects": [
+        {"attribute": "stocks", "delta": 3000.0},
+        {"attribute": "bonds", "delta": -2000.0},
+        {"attribute": "debt", "delta": 5000.0}
+      ]
+    },
+    {
+      "id": "rental_vacancy",
+      "label": "Rental property vacancy",
+      "description": "Your tenant moves out, property sits empty",
+      "preconditions": [
+        {"attribute": "real_estate", "operator": "Gt", "value": 0.0}
+      ],
+      "delay": 1,
+      "duration": 3,
+      "cooldown": 18,
+      "effects": [
+        {"attribute": "monthly_income", "delta": -300.0}
+      ]
+    },
+    {
+      "id": "interest_rate_hike",
+      "label": "Interest rate hike",
+      "description": "Central bank raises rates, your debt payments increase",
+      "preconditions": [
+        {"attribute": "debt", "operator": "Gt", "value": 10000.0}
+      ],
+      "delay": 3,
+      "duration": 2,
+      "cooldown": 36,
+      "effects": [
+        {"attribute": "monthly_expenses", "delta": 200.0}
+      ]
+    },
+    {
+      "id": "medical_emergency",
+      "label": "Medical emergency",
+      "description": "Unexpected health issue requires immediate treatment",
+      "preconditions": [],
+      "delay": 0,
+      "duration": 1,
+      "cooldown": 30,
+      "effects": [
+        {"attribute": "cash", "delta": -4000.0},
+        {"attribute": "debt", "delta": 4000.0}
+      ]
+    }
+  ]
+}

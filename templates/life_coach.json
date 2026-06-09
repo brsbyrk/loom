@@ -1,0 +1,353 @@
+{
+  "name": "Life Coach",
+  "description": "Personal life simulation — career, health, relationships, skills, and wealth management",
+  "schema": {
+    "version": 1,
+    "attributes": [
+      {"name": "wealth.cash", "unit": "$", "description": "Liquid cash"},
+      {"name": "wealth.stocks", "unit": "$", "description": "Stock portfolio value"},
+      {"name": "wealth.house_value", "unit": "$", "description": "Current home value"},
+      {"name": "wealth.debt", "unit": "$", "description": "Total outstanding debt"},
+      {"name": "health.physical", "unit": "pts", "bounds": [0, 100], "description": "Physical health score"},
+      {"name": "health.stress", "unit": "pts", "bounds": [0, 100], "description": "Stress level (lower is better)"},
+      {"name": "skills.rust", "unit": "pts", "bounds": [0, 100], "description": "Rust programming skill"},
+      {"name": "skills.python", "unit": "pts", "bounds": [0, 100], "description": "Python programming skill"},
+      {"name": "skills.negotiation", "unit": "pts", "bounds": [0, 100], "description": "Negotiation skill"},
+      {"name": "social.bob", "unit": "pts", "bounds": [0, 100], "description": "Relationship with Bob"},
+      {"name": "social.alice", "unit": "pts", "bounds": [0, 100], "description": "Relationship with Alice"},
+      {"name": "time_free", "unit": "hrs", "description": "Free time per week"}
+    ]
+  },
+  "decisions": [
+    {
+      "id": "take_remote_job",
+      "label": "Take remote job at Nvidia",
+      "preconditions": [
+        {"attribute": "wealth.cash", "operator": "Gt", "value": 15000},
+        {"attribute": "skills.rust", "operator": "Gte", "value": 60}
+      ],
+      "cost": [
+        {"attribute": "wealth.cash", "delta": -5000}
+      ],
+      "outcomes": [
+        {
+          "label": "Great culture fit",
+          "weight": 70,
+          "transform": {
+            "type": "declarative",
+            "effects": [
+              {"attribute": "wealth.cash", "delta": 40000},
+              {"attribute": "skills.rust", "delta": 20},
+              {"attribute": "health.stress", "delta": 15}
+            ]
+          }
+        },
+        {
+          "label": "Toxic environment",
+          "weight": 30,
+          "transform": {
+            "type": "declarative",
+            "effects": [
+              {"attribute": "wealth.cash", "delta": 40000},
+              {"attribute": "health.stress", "delta": 25},
+              {"attribute": "health.physical", "delta": -10}
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "improve_health",
+      "label": "Address your declining health",
+      "preconditions": [],
+      "cost": [],
+      "outcomes": [
+        {
+          "label": "Join a gym",
+          "weight": 60.0,
+          "transform": {
+            "type": "declarative",
+            "effects": [
+              {"attribute": "health.physical", "delta": 20.0},
+              {"attribute": "wealth.cash", "delta": -500.0},
+              {"attribute": "time_free", "delta": -5.0}
+            ]
+          }
+        },
+        {
+          "label": "Change diet",
+          "weight": 30.0,
+          "transform": {
+            "type": "declarative",
+            "effects": [
+              {"attribute": "health.physical", "delta": 10.0},
+              {"attribute": "wealth.cash", "delta": -200.0}
+            ]
+          }
+        },
+        {
+          "label": "Ignore it",
+          "weight": 10.0,
+          "transform": {
+            "type": "declarative",
+            "effects": [
+              {"attribute": "health.stress", "delta": 10.0}
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "job_search_options",
+      "label": "Find a new job",
+      "preconditions": [],
+      "cost": [],
+      "outcomes": [
+        {
+          "label": "Take first offer",
+          "weight": 50.0,
+          "transform": {
+            "type": "declarative",
+            "effects": [
+              {"attribute": "wealth.cash", "delta": 40000.0},
+              {"attribute": "skills.rust", "delta": 5.0},
+              {"attribute": "health.stress", "delta": -5.0}
+            ]
+          }
+        },
+        {
+          "label": "Wait for better",
+          "weight": 30.0,
+          "transform": {
+            "type": "declarative",
+            "effects": [
+              {"attribute": "wealth.cash", "delta": 60000.0},
+              {"attribute": "health.stress", "delta": 10.0}
+            ]
+          }
+        },
+        {
+          "label": "Switch careers",
+          "weight": 20.0,
+          "transform": {
+            "type": "declarative",
+            "effects": [
+              {"attribute": "wealth.cash", "delta": 30000.0},
+              {"attribute": "skills.rust", "delta": -10.0},
+              {"attribute": "skills.python", "delta": 20.0},
+              {"attribute": "health.stress", "delta": 5.0}
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "passives": [
+    {
+      "id": "salary",
+      "label": "Monthly salary",
+      "frequency": {"type": "everystep"},
+      "effects": [
+        {"attribute": "wealth.cash", "delta": 3333.33}
+      ]
+    },
+    {
+      "id": "stress_decay",
+      "label": "Natural stress recovery",
+      "frequency": {"type": "everystep"},
+      "effects": [
+        {"attribute": "health.stress", "delta": -2}
+      ]
+    },
+    {
+      "id": "health_maintenance",
+      "label": "Health damage from high stress",
+      "frequency": {
+        "type": "when",
+        "attribute": "health.stress",
+        "operator": "Gt",
+        "value": 70
+      },
+      "effects": [
+        {"attribute": "health.physical", "delta": -0.5}
+      ]
+    },
+    {
+      "id": "living_expenses",
+      "label": "Living expenses (all wealth groups)",
+      "frequency": {"type": "everystep"},
+      "effects": [
+        {"group": "wealth", "delta": -250}
+      ]
+    }
+  ],
+  "goals": {
+    "default": {
+      "weights": {
+        "wealth.cash": 1.0,
+        "wealth.stocks": 0.8,
+        "wealth.house_value": 0.5,
+        "wealth.debt": -1.0,
+        "health.physical": 0.7,
+        "health.stress": -0.3,
+        "skills.rust": 0.4,
+        "skills.python": 0.4,
+        "skills.negotiation": 0.4,
+        "social.bob": 0.3,
+        "social.alice": 0.3,
+        "time_free": 0.2
+      },
+      "cliffs": {
+        "health.physical": {"min": 30.0, "penalty": 1.0}
+      }
+    }
+  },
+  "events": [
+    {
+      "id": "car_breakdown",
+      "label": "Car breaks down",
+      "description": "Your car needs major repairs after a stressful week",
+      "preconditions": [
+        {"attribute": "health.stress", "operator": "Gt", "value": 30.0}
+      ],
+      "delay": 2,
+      "duration": 1,
+      "cooldown": 30,
+      "effects": [
+        {"attribute": "wealth.cash", "delta": -2000.0}
+      ]
+    },
+    {
+      "id": "health_scare",
+      "label": "Health scare",
+      "description": "Your body is giving you warning signs",
+      "preconditions": [
+        {"attribute": "health.physical", "operator": "Lt", "value": 40.0}
+      ],
+      "delay": 1,
+      "duration": 1,
+      "cooldown": 24,
+      "effects": [
+        {"attribute": "health.physical", "delta": -8.0},
+        {"attribute": "health.stress", "delta": 15.0}
+      ],
+      "spawns_decision_id": "improve_health"
+    },
+    {
+      "id": "unexpected_bonus",
+      "label": "Unexpected work bonus",
+      "description": "Your manager surprises you with a performance bonus",
+      "preconditions": [
+        {"attribute": "skills.rust", "operator": "Gt", "value": 70.0}
+      ],
+      "delay": 0,
+      "duration": 1,
+      "cooldown": 20,
+      "effects": [
+        {"attribute": "wealth.cash", "delta": 8000.0},
+        {"attribute": "health.stress", "delta": -5.0}
+      ]
+    },
+    {
+      "id": "social_conflict",
+      "label": "Social conflict",
+      "description": "Your stress is affecting your relationships",
+      "preconditions": [
+        {"attribute": "health.stress", "operator": "Gt", "value": 60.0}
+      ],
+      "delay": 2,
+      "duration": 1,
+      "cooldown": 18,
+      "effects": [
+        {"attribute": "social.alice", "delta": -10.0},
+        {"attribute": "social.bob", "delta": -10.0},
+        {"attribute": "health.stress", "delta": 5.0}
+      ]
+    },
+    {
+      "id": "layoff_wave",
+      "label": "Layoff wave hits your company",
+      "description": "Your company announces mass layoffs",
+      "preconditions": [
+        {"attribute": "skills.rust", "operator": "Lt", "value": 50.0}
+      ],
+      "delay": 3,
+      "duration": 1,
+      "cooldown": 48,
+      "effects": [
+        {"attribute": "wealth.cash", "delta": -30000.0},
+        {"attribute": "health.stress", "delta": 25.0}
+      ],
+      "spawns_decision_id": "job_search_options"
+    },
+    {
+      "id": "burnout",
+      "label": "Burnout",
+      "description": "Chronic stress leads to burnout — you can't function at full capacity",
+      "preconditions": [
+        {"attribute": "health.stress", "operator": "Gt", "value": 75.0}
+      ],
+      "delay": 2,
+      "duration": 3,
+      "cooldown": 30,
+      "priority": 5,
+      "effects": [
+        {"attribute": "health.physical", "delta": -4.0},
+        {"attribute": "health.stress", "delta": 3.0}
+      ],
+      "triggers_event_id": "depression_risk"
+    },
+    {
+      "id": "depression_risk",
+      "label": "Risk of depression",
+      "description": "Your mental health is deteriorating — either triggered by burnout or when physical health drops too low",
+      "precondition_mode": "any",
+      "preconditions": [
+        {"attribute": "health.physical", "operator": "Lt", "value": 40.0}
+      ],
+      "triggered_by": ["burnout"],
+      "suppressed_by": ["therapy_session"],
+      "priority": 10,
+      "delay": 1,
+      "duration": 2,
+      "cooldown": 48,
+      "effects": [
+        {"attribute": "health.stress", "delta": 10.0},
+        {"attribute": "social.alice", "delta": -5.0},
+        {"attribute": "social.bob", "delta": -5.0}
+      ],
+      "triggers_event_id": "social_isolation"
+    },
+    {
+      "id": "social_isolation",
+      "label": "Social isolation",
+      "description": "You withdraw from your social circles — friends notice your absence",
+      "triggered_by": ["depression_risk"],
+      "priority": 8,
+      "delay": 0,
+      "duration": 3,
+      "cooldown": 60,
+      "effects": [
+        {"attribute": "social.alice", "delta": -10.0},
+        {"attribute": "social.bob", "delta": -15.0},
+        {"attribute": "skills.negotiation", "delta": -3.0}
+      ],
+      "triggers_on_resolve": "therapy_session"
+    },
+    {
+      "id": "therapy_session",
+      "label": "Therapy session opportunity",
+      "description": "After a period of isolation, you seek professional help",
+      "triggered_by": ["social_isolation"],
+      "delay": 0,
+      "duration": 1,
+      "cooldown": 24,
+      "effects": [
+        {"attribute": "health.stress", "delta": -20.0},
+        {"attribute": "health.physical", "delta": 5.0},
+        {"attribute": "wealth.cash", "delta": -1500.0}
+      ],
+      "spawns_decision_id": "improve_health"
+    }
+  ]
+}

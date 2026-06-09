@@ -19,9 +19,11 @@
 //! Database location: `~/.loom/loom.db` (unified — schemas + states + timelines in one file).
 
 pub mod event;
+pub mod template;
 pub mod timeline;
 
 pub use event::{AppliedEventEffect, NamedEvent, PreconditionMode};
+pub use template::Template;
 pub use timeline::{ForkRow, SnapshotRow, TimelineRow, TimelineStore, TimelineSummary};
 
 use loom_core::{
@@ -610,6 +612,42 @@ impl Store {
         } else {
             Ok(false)
         }
+    }
+}
+
+// ── Template seeding ──────────────────────────────────────────────────────────────
+
+impl Store {
+    /// Seed the database from a template — upserts everything in one call.
+    /// Returns the schema name used (template.name, lowercased with underscores).
+    pub fn seed_from_template(&self, template: &Template) -> SqlResult<String> {
+        let schema_name = template.name.to_lowercase().replace(' ', "_");
+
+        // 1. Schema
+        let attributes_json = serde_json::to_string(&template.schema.attributes).unwrap();
+        self.upsert_schema(&schema_name, &attributes_json)?;
+
+        // 2. Decisions
+        for d in &template.decisions {
+            self.upsert_decision(&schema_name, d)?;
+        }
+
+        // 3. Passives
+        for p in &template.passives {
+            self.upsert_passive(&schema_name, p)?;
+        }
+
+        // 4. Goals
+        for (name, goal) in &template.goals {
+            self.upsert_goal(&schema_name, name, goal)?;
+        }
+
+        // 5. Events
+        for e in &template.events {
+            self.upsert_event(&schema_name, e)?;
+        }
+
+        Ok(schema_name)
     }
 }
 
