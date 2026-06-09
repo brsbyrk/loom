@@ -502,6 +502,13 @@ impl App {
         if self.schema_name.is_empty() {
             return;
         }
+        // Guard: skip if state isn't initialized for this schema yet
+        if self.current_state.is_empty()
+            || self.current_state.len() != self.goal.dimension()
+            || self.decisions.is_empty()
+        {
+            return;
+        }
 
         // 1. Rank decisions by utility (simulate each available decision)
         self.dashboard_decisions.clear();
