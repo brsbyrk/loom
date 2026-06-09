@@ -1025,8 +1025,8 @@ impl App {
         let ts = TimelineStore::new(&self.store.conn);
 
         // Check events
-        if !self.schema_name.is_empty() {
-            match ts.check_and_advance_events(timeline_id, &self.schema_name, &values) {
+        if self.schema.dimension() > 0 {
+            match ts.check_and_advance_events(timeline_id, &self.schema, &values) {
                 Ok(effects) => {
                     self.last_event_effects = effects.clone();
                     // Apply deltas to values

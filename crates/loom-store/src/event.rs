@@ -5,7 +5,7 @@
 //! independent of `loom-core`'s Event type (which is engine-internal).
 //! Active event instances live in `active_events` (per-timeline).
 
-use loom_core::{NamedCondition, NamedEffect};
+use loom_core::{AttributeSchema, NamedCondition, NamedEffect};
 use rusqlite::{params, Result as SqlResult};
 use serde::{Deserialize, Serialize};
 
@@ -228,7 +228,7 @@ impl crate::timeline::TimelineStore<'_> {
     pub fn check_and_advance_events(
         &self,
         timeline_id: i64,
-        schema_name: &str,
+        schema: &AttributeSchema,
         current_values: &[f64],
     ) -> SqlResult<Vec<AppliedEventEffect>> {
         let mut results: Vec<AppliedEventEffect> = Vec::new();
@@ -248,7 +248,7 @@ impl crate::timeline::TimelineStore<'_> {
             }
 
             // Resolve preconditions to engine Condition and check them
-            let preconditions_met = self.check_preconditions(&evt_tmpl.preconditions, current_values);
+            let preconditions_met = self.check_preconditions(&evt_tmpl.preconditions, current_values, schema);
             if !preconditions_met {
                 continue;
             }
@@ -267,19 +267,17 @@ impl crate::timeline::TimelineStore<'_> {
                 });
             } else {
                 // Fire immediately
-                let effects = self.resolve_effects(&evt_tmpl.effects, current_values);
-                let attribute_names = self.resolve_effect_attribute_names(&evt_tmpl.effects);
                 self.create_active_event(timeline_id, evt_tmpl.row_id, "active", 0, evt_tmpl.duration, evt_tmpl.cooldown)?;
 
-                for (i, (delta, attr_name)) in effects.iter().zip(attribute_names.iter()).enumerate() {
+                for (attr_name, delta) in self.resolve_effects(&evt_tmpl.effects, current_values, schema) {
                     results.push(AppliedEventEffect {
                         event_label: evt_tmpl.label.clone(),
                         phase: "active".into(),
                         event_id: evt_tmpl.event_id.clone(),
-                        delta: *delta,
+                        delta: delta,
                         attribute_name: attr_name.clone(),
                         spawned_decision_id: evt_tmpl.spawns_decision_id.clone(),
-                        description: format!("{} fired — {}: {}", evt_tmpl.label, attr_name, if *delta >= 0.0 { format!("+{:.1}", delta) } else { format!("{:.1}", delta) }),
+                        description: format!("{} fired — {}: {}", evt_tmpl.label, attr_name, if delta >= 0.0 { format!("+{:.1}", delta) } else { format!("{:.1}", delta) }),
                     });
                 }
             }
@@ -297,21 +295,19 @@ impl crate::timeline::TimelineStore<'_> {
                     if active.delay_remaining == 0 {
                         // Find the template to fire effects
                         if let Some(tmpl) = events.iter().find(|e| e.row_id == active.event_template_id) {
-                            let effects = self.resolve_effects(&tmpl.effects, current_values);
-                            let attribute_names = self.resolve_effect_attribute_names(&tmpl.effects);
                             active.phase = "active".to_string();
                             active.duration_remaining = tmpl.duration;
                             self.update_active_event_activate(active.id, active.duration_remaining)?;
 
-                            for (i, (delta, attr_name)) in effects.iter().zip(attribute_names.iter()).enumerate() {
+                            for (attr_name, delta) in self.resolve_effects(&tmpl.effects, current_values, schema) {
                                 results.push(AppliedEventEffect {
                                     event_label: tmpl.label.clone(),
                                     phase: "active".into(),
                                     event_id: tmpl.event_id.clone(),
-                                    delta: *delta,
+                                    delta: delta,
                                     attribute_name: attr_name.clone(),
                                     spawned_decision_id: tmpl.spawns_decision_id.clone(),
-                                    description: format!("{} fired — {}: {}", tmpl.label, attr_name, if *delta >= 0.0 { format!("+{:.1}", delta) } else { format!("{:.1}", delta) }),
+                                    description: format!("{} fired — {}: {}", tmpl.label, attr_name, if delta >= 0.0 { format!("+{:.1}", delta) } else { format!("{:.1}", delta) }),
                                 });
                             }
                         }
@@ -321,15 +317,13 @@ impl crate::timeline::TimelineStore<'_> {
                     if active.duration_remaining > 0 {
                         // Apply effects again this step (for multi-step duration spread)
                         if let Some(tmpl) = events.iter().find(|e| e.row_id == active.event_template_id) {
-                            let effects = self.resolve_effects(&tmpl.effects, current_values);
-                            let attribute_names = self.resolve_effect_attribute_names(&tmpl.effects);
 
                             active.duration_remaining = active.duration_remaining.saturating_sub(1);
                             if active.duration_remaining > 0 {
                                 // Ongoing — spread effect
-                                for (i, (delta, attr_name)) in effects.iter().zip(attribute_names.iter()).enumerate() {
+                                for (attr_name, delta) in self.resolve_effects(&tmpl.effects, current_values, schema) {
                                     // For spread: divide delta by duration for each active step
-                                    let per_step = if tmpl.duration > 0 { delta / tmpl.duration as f64 } else { *delta };
+                                    let per_step = if tmpl.duration > 0 { delta / tmpl.duration as f64 } else { delta };
                                     results.push(AppliedEventEffect {
                                         event_label: tmpl.label.clone(),
                                         phase: "active".into(),
@@ -523,35 +517,29 @@ impl crate::timeline::TimelineStore<'_> {
     }
 
     /// Check preconditions (list of NamedCondition) against current attribute values.
-    /// Since we don't have the schema here to resolve names to indices, we do a simple
-    /// heuristic: we load the schema to match attribute names.
-    fn check_preconditions(&self, preconditions: &[NamedCondition], values: &[f64]) -> bool {
+    /// Uses the schema to resolve attribute names to indices.
+    fn check_preconditions(&self, preconditions: &[NamedCondition], values: &[f64], schema: &AttributeSchema) -> bool {
         if preconditions.is_empty() {
             return true;
         }
-        // We resolve attribute names on the fly using the stored schema
-        // Since we don't have direct schema access here, we use a simplified approach:
-        // check by fetching the schema from the DB
-        preconditions.iter().all(|c| {
-            // Without schema resolution here, we use a heuristic:
-            // We can't resolve name→index without the schema, so we
-            // always return true for empty preconditions and
-            // for named preconditions we need the schema.
-            // Actually we need the schema. Let's fetch it.
-            true  // temporary: will be resolved by the caller
+        preconditions.iter().all(|nc| {
+            nc.resolve(schema)
+                .map(|c| c.check(values))
+                .unwrap_or(false)
         })
     }
 
-    /// Resolve named effects to flat deltas using a simplified model.
-    /// Without schema, we approximate by using the delta values directly.
-    fn resolve_effects(&self, effects: &[NamedEffect], _current_values: &[f64]) -> Vec<f64> {
-        effects.iter().map(|e| e.delta).collect()
-    }
-
-    /// Get attribute names from effects (for display).
-    fn resolve_effect_attribute_names(&self, effects: &[NamedEffect]) -> Vec<String> {
-        effects.iter().map(|e| {
-            e.attribute.clone().unwrap_or_else(|| e.group.clone().unwrap_or_else(|| "?".to_string()))
+    /// Resolve named effects to (attribute_name, computed_delta) pairs.
+    /// Properly handles group expansion, scaling, and compute_delta.
+    fn resolve_effects(&self, effects: &[NamedEffect], current_values: &[f64], schema: &AttributeSchema) -> Vec<(String, f64)> {
+        effects.iter().flat_map(|ne| {
+            ne.resolve(schema).unwrap_or_default().into_iter().map(|ae| {
+                let delta = ae.compute_delta(current_values);
+                let attr_name = schema.at(ae.attribute_index)
+                    .map(|a| a.name.clone())
+                    .unwrap_or_else(|| "?".to_string());
+                (attr_name, delta)
+            })
         }).collect()
     }
 
