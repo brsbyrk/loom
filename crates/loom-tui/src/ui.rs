@@ -2164,20 +2164,26 @@ fn render_edit_events_detail(f: &mut Frame, app: &App) {
 
 fn render_dashboard(f: &mut Frame, app: &App) {
     let area = f.area();
-    // Reserve top line for tab bar offset, then split into 3 sections
+    // Reserve top line for tab bar + bottom line for footer
     let inner = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(1), Constraint::Min(0), Constraint::Length(1)])
         .split(area);
     let body = inner[1];
 
-    // Split body into STATE, DECISIONS, RECENT
+    // Compute dynamic heights based on content
+    let available = body.height as usize;
+    let attr_rows = (app.schema.attributes.len() + 1) / 2; // 2 per row, ceil
+    let state_h = (2 + attr_rows.max(1)).min(available / 3);
+    let decision_h = (2 + app.dashboard_decisions.len().min(12).max(1)).min(available.saturating_sub(state_h + 4));
+    let recent_h = available.saturating_sub(state_h + decision_h);
+
     let sections = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3 + 2), // STATE header + 3 lines of attrs
-            Constraint::Length(3 + 2), // DECISIONS header + 3 lines
-            Constraint::Min(0),        // RECENT takes rest
+            Constraint::Length(state_h as u16),
+            Constraint::Length(decision_h as u16),
+            Constraint::Length(recent_h as u16),
         ])
         .split(body);
 
@@ -2307,6 +2313,8 @@ fn render_dashboard(f: &mut Frame, app: &App) {
         Span::raw("simulate  "),
         Span::styled(" R ", Style::default().fg(ACCENT).bold()),
         Span::raw("refresh  "),
+        Span::styled(" L ", Style::default().fg(ACCENT).bold()),
+        Span::raw("schema  "),
         Span::styled(" Tab ", Style::default().fg(ACCENT).bold()),
         Span::raw("tabs  "),
         Span::styled(" Q ", Style::default().fg(ACCENT).bold()),

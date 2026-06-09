@@ -1187,6 +1187,9 @@ fn handle_dashboard(app: &mut App, code: KeyCode) {
         KeyCode::Tab => {
             app.screen = Screen::List; // Go to existing tabs
         }
+        KeyCode::Char('l') | KeyCode::Char('L') => {
+            app.screen = Screen::SchemaList; // Load different schema
+        }
         KeyCode::Char('s') | KeyCode::Char('S') => {
             // Simulate selected decision
             if let Some((idx, _, _, true)) = app.dashboard_decisions.get(app.dashboard_scroll) {
