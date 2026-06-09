@@ -23,6 +23,8 @@ pub enum Screen {
     StateManager,
     /// Simulation results.
     Results,
+    /// Dashboard — the main product surface.
+    Dashboard,
     /// Error screen.
     Error(String),
     /// Edit decisions list.
@@ -229,6 +231,15 @@ pub struct App {
     pub active_timeline_name: String,
     /// Active timeline schema name (resolved).
     pub active_timeline_schema_name: String,
+
+    /// Cached ranked decisions for dashboard: (decision_idx, label, utility_score, available: bool)
+    pub dashboard_decisions: Vec<(usize, String, f64, bool)>,
+    /// Active project displays: (label, remaining, duration, project_id)
+    pub dashboard_projects: Vec<(String, usize, usize, usize)>,
+    /// Recent timeline entries: (timestamp, entry_text)
+    pub dashboard_recent: Vec<(String, String)>,
+    /// Dashboard scroll offset (if needed)
+    pub dashboard_scroll: usize,
     /// Snapshots for the active timeline.
     pub snapshots: Vec<SnapshotRow>,
     /// Forks for the active timeline.
@@ -286,6 +297,7 @@ impl App {
             version: 1,
             attributes: vec![],
         });
+        let has_schemas = !schema_list.is_empty();
         Self {
             store,
             schema: empty_schema.clone(),
@@ -299,7 +311,11 @@ impl App {
             current_state: DynamicState::from_vec(vec![], empty_schema.clone()),
             schema_list,
             schema_idx: 0,
-            screen: Screen::TimelineBrowser,
+            screen: if has_schemas {
+                Screen::Dashboard
+            } else {
+                Screen::SchemaList
+            },
             prev_screen: Screen::TimelineBrowser,
             selected_idx: 0,
             state_idx: 0,
@@ -344,6 +360,10 @@ impl App {
             timeline_input_mode: false,
             timeline_input_action: TimelineInputAction::None,
             create_timeline_schema_idx: 0,
+            dashboard_decisions: Vec::new(),
+            dashboard_projects: Vec::new(),
+            dashboard_recent: Vec::new(),
+            dashboard_scroll: 0,
         }
     }
 
@@ -386,6 +406,8 @@ impl App {
         self.goal = named_goal
             .resolve(&schema)
             .map_err(|e| format!("failed to resolve goal: {e}"))?;
+
+        self.refresh_dashboard();
 
         Ok(())
     }
@@ -470,6 +492,56 @@ impl App {
         self.prev_screen = self.screen.clone();
         self.screen = Screen::StateManager;
         self.input_mode = false;
+    }
+
+    /// Refresh all dashboard data — call on entering Dashboard and after actions.
+    pub fn refresh_dashboard(&mut self) {
+        if self.schema_name.is_empty() {
+            return;
+        }
+
+        // 1. Rank decisions by utility (simulate each available decision)
+        self.dashboard_decisions.clear();
+        let mut sim = Simulation::new(self.sim_config.horizon, self.sim_config.runs);
+        sim.passives = self.passives.clone();
+        sim.events = Vec::new(); // No events in dashboard preview for speed
+
+        for (idx, decision) in self.decisions.iter().enumerate() {
+            let available = decision.available(&self.current_state);
+            if available {
+                let analysis = sim.run_and_analyze(&self.current_state, decision, &self.goal);
+                let score = analysis.utility_distribution.mean;
+                self.dashboard_decisions.push((idx, decision.label.clone(), score, true));
+            } else {
+                self.dashboard_decisions.push((idx, decision.label.clone(), 0.0, false));
+            }
+        }
+        // Sort: available first, then by score descending, then unavailable
+        self.dashboard_decisions.sort_by(|a, b| {
+            b.3.cmp(&a.3) // available first
+                .then_with(|| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal))
+        });
+
+        // 2. Active projects — show from simulation state if available
+        self.dashboard_projects.clear();
+        // For now, show any active projects from the last simulation
+        // (Future: track active projects across sessions)
+
+        // 3. Recent timeline snapshots
+        self.dashboard_recent.clear();
+        if let Some(timeline_id) = self.active_timeline_id {
+            if let Ok(snapshots) = TimelineStore::new(&self.store.conn).list_snapshots(timeline_id) {
+                let recent: Vec<_> = snapshots.iter().rev().take(5).collect();
+                for s in recent {
+                    let entry_preview = if s.entry_text.len() > 80 {
+                        format!("{}...", &s.entry_text[..77])
+                    } else {
+                        s.entry_text.clone()
+                    };
+                    self.dashboard_recent.push((s.created_at.clone(), entry_preview));
+                }
+            }
+        }
     }
 
     /// Save the current state (or branch if branch-mode was activated).

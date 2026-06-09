@@ -100,6 +100,7 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App) -> Result<(), Box<dyn std:
                 Screen::ForkBrowser => handle_fork_browser(app, key.code),
                 Screen::EditEvents => handle_edit_events(app, key.code),
                 Screen::EditEventsDetail => handle_edit_events_detail(app, key.code),
+                Screen::Dashboard => handle_dashboard(app, key.code),
             }
         }
     }
@@ -1164,6 +1165,38 @@ fn handle_edit_events_detail(app: &mut App, code: KeyCode) {
                         state.list_idx = state.preconditions.len().saturating_add(state.effects.len()).saturating_sub(1);
                     }
                 }
+            }
+        }
+        _ => {}
+    }
+}
+
+// ── Dashboard handler ────────────────────────────────────────────────────────
+
+fn handle_dashboard(app: &mut App, code: KeyCode) {
+    match code {
+        KeyCode::Char('q') | KeyCode::Char('Q') => std::process::exit(0),
+        KeyCode::Tab => {
+            app.screen = Screen::List; // Go to existing tabs
+        }
+        KeyCode::Char('s') | KeyCode::Char('S') => {
+            // Simulate selected decision
+            if let Some((idx, _, _, true)) = app.dashboard_decisions.get(app.dashboard_scroll) {
+                app.selected_idx = *idx;
+                app.run_simulation();
+            }
+        }
+        KeyCode::Char('r') | KeyCode::Char('R') => {
+            app.refresh_dashboard();
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            if app.dashboard_scroll > 0 {
+                app.dashboard_scroll -= 1;
+            }
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            if app.dashboard_scroll + 1 < app.dashboard_decisions.len() {
+                app.dashboard_scroll += 1;
             }
         }
         _ => {}

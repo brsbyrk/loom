@@ -43,6 +43,7 @@ pub fn render(f: &mut Frame, app: &App) {
         Screen::ForkBrowser => render_fork_browser(f, app),
         Screen::EditEvents => render_edit_events(f, app),
         Screen::EditEventsDetail => render_edit_events_detail(f, app),
+        Screen::Dashboard => render_dashboard(f, app),
     }
 }
 
@@ -2157,4 +2158,160 @@ fn render_edit_events_detail(f: &mut Frame, app: &App) {
     ]))
     .style(Style::default().bg(HEADER_BG));
     f.render_widget(footer, chunks[1]);
+}
+
+// ── Dashboard screen ─────────────────────────────────────────────────────────────────
+
+fn render_dashboard(f: &mut Frame, app: &App) {
+    let area = f.area();
+    // Reserve top line for tab bar offset, then split into 3 sections
+    let inner = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(0), Constraint::Length(1)])
+        .split(area);
+    let body = inner[1];
+
+    // Split body into STATE, DECISIONS, RECENT
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3 + 2), // STATE header + 3 lines of attrs
+            Constraint::Length(3 + 2), // DECISIONS header + 3 lines
+            Constraint::Min(0),        // RECENT takes rest
+        ])
+        .split(body);
+
+    // ── STATE block ──────────────────────────────────────────────────────────────
+    let mut state_lines: Vec<Line> = Vec::new();
+    let attrs: Vec<String> = app
+        .schema
+        .attributes
+        .iter()
+        .map(|a| {
+            let val = app.current_state.get(&a.name).unwrap_or(0.0);
+            format!("{}= {:.0}", a.name, val)
+        })
+        .collect();
+
+    if !attrs.is_empty() {
+        // Arrange in rows of 2
+        for chunk in attrs.chunks(2) {
+            let left = chunk.first().cloned().unwrap_or_default();
+            let right = chunk.get(1).cloned().unwrap_or_default();
+            state_lines.push(Line::from(vec![
+                Span::styled(format!("  {:<30}", left), Style::default().fg(Color::White)),
+                Span::styled(format!("{:<30}", right), Style::default().fg(DIM)),
+            ]));
+        }
+    } else {
+        state_lines.push(Line::from(Span::styled(
+            "  (no schema loaded)",
+            Style::default().fg(DIM),
+        )));
+    }
+
+    let state_block = Paragraph::new(state_lines)
+        .block(
+            Block::default()
+                .title(format!(" STATE — {} ", app.schema_name))
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(ACCENT)),
+        )
+        .wrap(Wrap { trim: false });
+    f.render_widget(state_block, sections[0]);
+
+    // ── DECISIONS block ─────────────────────────────────────────────────────────
+    let mut decision_lines: Vec<Line> = Vec::new();
+    if app.dashboard_decisions.is_empty() {
+        decision_lines.push(Line::from(Span::styled(
+            "  No decisions loaded.",
+            Style::default().fg(DIM),
+        )));
+    } else {
+        let visible = &app.dashboard_decisions;
+        let start = app.dashboard_scroll.min(visible.len().saturating_sub(1));
+        for (i, (_, label, score, available)) in visible.iter().enumerate().skip(start).take(10) {
+            let cursor = if i == app.dashboard_scroll { " >" } else { "  " };
+            if *available {
+                let util_str = if *score >= 0.0 {
+                    format!("+{:.1}", score)
+                } else {
+                    format!("{:.1}", score)
+                };
+                decision_lines.push(Line::from(vec![
+                    Span::styled(
+                        format!("{} {}. {} ", cursor, i + 1, label),
+                        Style::default().fg(GOOD),
+                    ),
+                    Span::styled(format!("util: {}", util_str), Style::default().fg(Color::White)),
+                ]));
+            } else {
+                decision_lines.push(Line::from(vec![
+                    Span::styled(
+                        format!("{} {}. ✗ {} ", cursor, i + 1, label),
+                        Style::default().fg(DIM),
+                    ),
+                    Span::styled("(unavailable)", Style::default().fg(DIM)),
+                ]));
+            }
+        }
+        if visible.len() > 10 {
+            decision_lines.push(Line::from(Span::styled(
+                format!("  ... and {} more (↑↓ to scroll)", visible.len() - 10),
+                Style::default().fg(DIM),
+            )));
+        }
+    }
+
+    let decisions_block = Paragraph::new(decision_lines)
+        .block(
+            Block::default()
+                .title(format!(" DECISIONS (ranked) — {} total ", app.dashboard_decisions.len()))
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(ACCENT)),
+        )
+        .wrap(Wrap { trim: false });
+    f.render_widget(decisions_block, sections[1]);
+
+    // ── RECENT block ────────────────────────────────────────────────────────────
+    let mut recent_lines: Vec<Line> = Vec::new();
+    if app.dashboard_recent.is_empty() {
+        recent_lines.push(Line::from(Span::styled(
+            "  No timeline activity yet.",
+            Style::default().fg(DIM),
+        )));
+    } else {
+        for (ts, entry) in &app.dashboard_recent {
+            recent_lines.push(Line::from(vec![
+                Span::styled(format!("  {}  ", ts), Style::default().fg(DIM)),
+                Span::styled(entry, Style::default().fg(Color::White)),
+            ]));
+        }
+    }
+
+    let recent_block = Paragraph::new(recent_lines)
+        .block(
+            Block::default()
+                .title(" RECENT ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(ACCENT)),
+        )
+        .wrap(Wrap { trim: false });
+    f.render_widget(recent_block, sections[2]);
+
+    // ── Footer ──────────────────────────────────────────────────────────────────
+    let footer = Paragraph::new(Line::from(vec![
+        Span::styled(" ↑↓/jk ", Style::default().fg(ACCENT).bold()),
+        Span::raw("scroll  "),
+        Span::styled(" S ", Style::default().fg(ACCENT).bold()),
+        Span::raw("simulate  "),
+        Span::styled(" R ", Style::default().fg(ACCENT).bold()),
+        Span::raw("refresh  "),
+        Span::styled(" Tab ", Style::default().fg(ACCENT).bold()),
+        Span::raw("tabs  "),
+        Span::styled(" Q ", Style::default().fg(ACCENT).bold()),
+        Span::raw("quit"),
+    ]))
+    .style(Style::default().bg(HEADER_BG));
+    f.render_widget(footer, inner[2]);
 }
