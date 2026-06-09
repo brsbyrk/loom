@@ -129,7 +129,6 @@ fn handle_schema_list(app: &mut App, code: KeyCode) {
                 let name = s.name.clone();
                 match app.load_schema(&name) {
                     Ok(()) => {
-                        app.init_default_state();
                         app.selected_idx = 0;
                         app.screen = Screen::List;
                     }

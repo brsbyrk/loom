@@ -407,6 +407,9 @@ impl App {
             .resolve(&schema)
             .map_err(|e| format!("failed to resolve goal: {e}"))?;
 
+        // Initialize default state BEFORE refreshing dashboard (needed for simulation)
+        self.init_default_state();
+
         self.refresh_dashboard();
 
         Ok(())
