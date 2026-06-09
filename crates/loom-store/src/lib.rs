@@ -21,7 +21,7 @@
 pub mod event;
 pub mod timeline;
 
-pub use event::{AppliedEventEffect, NamedEvent};
+pub use event::{AppliedEventEffect, NamedEvent, PreconditionMode};
 pub use timeline::{ForkRow, SnapshotRow, TimelineRow, TimelineStore, TimelineSummary};
 
 use loom_core::{

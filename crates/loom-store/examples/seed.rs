@@ -15,7 +15,7 @@ use loom_core::{
     NamedCondition, NamedDecision, NamedEffect, NamedGoalVector, NamedOutcome,
     NamedPassiveEffect, NamedTransform,
 };
-use loom_store::{NamedEvent, Store};
+use loom_store::{NamedEvent, PreconditionMode, Store};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
@@ -227,7 +227,7 @@ fn seed_personal_events(store: &Store, schema: &str) -> Result<(), Box<dyn std::
             spawns_decision_id: Some("job_search_options".into()),
             ..Default::default()
         },
-        // 6. burnout
+        // 6. burnout (cascade root)
         NamedEvent {
             id: "burnout".into(),
             label: "Burnout".into(),
@@ -240,12 +240,72 @@ fn seed_personal_events(store: &Store, schema: &str) -> Result<(), Box<dyn std::
             delay: 2,
             duration: 3,
             cooldown: 30,
-            // Per-step effects; the runtime divides by duration and applies each step.
+            priority: 5,
             effects: vec![
                 NamedEffect::fixed("health.physical", -4.0),
                 NamedEffect::fixed("health.stress", 3.0),
             ],
-            spawns_decision_id: None,
+            triggers_event_id: Some("depression_risk".into()),
+            ..Default::default()
+        },
+        // 7. depression_risk (chained from burnout, OR state: health < 40)
+        NamedEvent {
+            id: "depression_risk".into(),
+            label: "Risk of depression".into(),
+            description: "Your mental health is deteriorating — either triggered by burnout or when physical health drops too low".into(),
+            precondition_mode: PreconditionMode::Any,
+            preconditions: vec![NamedCondition {
+                attribute: "health.physical".into(),
+                operator: Lt,
+                value: 40.0,
+            }],
+            triggered_by: vec!["burnout".into()],
+            suppressed_by: vec!["therapy_session".into()],
+            priority: 10,
+            delay: 1,
+            duration: 2,
+            cooldown: 48,
+            effects: vec![
+                NamedEffect::fixed("health.stress", 10.0),
+                NamedEffect::fixed("social.alice", -5.0),
+                NamedEffect::fixed("social.bob", -5.0),
+            ],
+            triggers_event_id: Some("social_isolation".into()),
+            ..Default::default()
+        },
+        // 8. social_isolation (pure chain: only fires when depression_risk fires)
+        NamedEvent {
+            id: "social_isolation".into(),
+            label: "Social isolation".into(),
+            description: "You withdraw from your social circles — friends notice your absence".into(),
+            triggered_by: vec!["depression_risk".into()],
+            priority: 8,
+            delay: 0,
+            duration: 3,
+            cooldown: 60,
+            effects: vec![
+                NamedEffect::fixed("social.alice", -10.0),
+                NamedEffect::fixed("social.bob", -15.0),
+                NamedEffect::fixed("skills.negotiation", -3.0),
+            ],
+            triggers_on_resolve: Some("therapy_session".into()),
+            ..Default::default()
+        },
+        // 9. therapy_session (pure chain: fires when social_isolation resolves)
+        NamedEvent {
+            id: "therapy_session".into(),
+            label: "Therapy session opportunity".into(),
+            description: "After a period of isolation, you seek professional help".into(),
+            triggered_by: vec!["social_isolation".into()],
+            delay: 0,
+            duration: 1,
+            cooldown: 24,
+            effects: vec![
+                NamedEffect::fixed("health.stress", -20.0),
+                NamedEffect::fixed("health.physical", 5.0),
+                NamedEffect::fixed("wealth.cash", -1500.0),
+            ],
+            spawns_decision_id: Some("improve_health".into()),
             ..Default::default()
         },
     ];
@@ -370,8 +430,8 @@ fn seed_personal_events(store: &Store, schema: &str) -> Result<(), Box<dyn std::
 fn seed_financial_events(store: &Store, schema: &str) -> Result<(), Box<dyn std::error::Error>> {
     println!("── Seeding financial events inline ──");
 
-    // 9. market_correction
     let events = vec![
+        // 9. market_correction (cascade root)
         NamedEvent {
             id: "market_correction".into(),
             label: "Stock market correction".into(),
@@ -384,12 +444,93 @@ fn seed_financial_events(store: &Store, schema: &str) -> Result<(), Box<dyn std:
             delay: 2,
             duration: 3,
             cooldown: 24,
-            // Per-step effect; runtime divides by duration.
+            priority: 20,
             effects: vec![NamedEffect::fixed("stocks", -1500.0)],
             spawns_decision_id: Some("sell_or_hold".into()),
+            triggers_event_id: Some("panic_selling".into()),
+            triggers_on_resolve: Some("regulatory_volatility".into()),
             ..Default::default()
         },
-        // 10. rental_vacancy
+        // 10. panic_selling (pure chain, suppressed by bailout)
+        NamedEvent {
+            id: "panic_selling".into(),
+            label: "Panic selling".into(),
+            description: "Investors panic and dump their positions — cascading losses".into(),
+            triggered_by: vec!["market_correction".into()],
+            suppressed_by: vec!["emergency_bailout".into()],
+            priority: 15,
+            delay: 1,
+            duration: 2,
+            cooldown: 36,
+            effects: vec![NamedEffect::fixed("stocks", -2000.0)],
+            triggers_event_id: Some("margin_call".into()),
+            ..Default::default()
+        },
+        // 11. margin_call (triggered OR state: debt > 50k)
+        NamedEvent {
+            id: "margin_call".into(),
+            label: "Margin call".into(),
+            description: "Your brokerage demands more collateral — triggered by panic or high debt".into(),
+            precondition_mode: PreconditionMode::Any,
+            preconditions: vec![NamedCondition {
+                attribute: "debt".into(),
+                operator: Gt,
+                value: 50000.0,
+            }],
+            triggered_by: vec!["panic_selling".into()],
+            priority: 10,
+            delay: 0,
+            duration: 1,
+            cooldown: 24,
+            effects: vec![
+                NamedEffect::fixed("cash", -10000.0),
+                NamedEffect::fixed("debt", 15000.0),
+                NamedEffect::fixed("credit_score", -30.0),
+            ],
+            ..Default::default()
+        },
+        // 12. regulatory_volatility (chain on market_correction resolve)
+        NamedEvent {
+            id: "regulatory_volatility".into(),
+            label: "Regulatory volatility".into(),
+            description: "New regulations introduced after the crash stabilize some assets but disrupt others".into(),
+            triggered_by: vec!["market_correction".into()],
+            delay: 1,
+            duration: 2,
+            cooldown: 48,
+            effects: vec![
+                NamedEffect::fixed("bonds", 5000.0),
+                NamedEffect::fixed("stocks", -1000.0),
+                NamedEffect::fixed("monthly_expenses", 150.0),
+            ],
+            ..Default::default()
+        },
+        // 13. emergency_bailout (blocks panic_selling)
+        NamedEvent {
+            id: "emergency_bailout".into(),
+            label: "Emergency bailout".into(),
+            description: "Central bank intervenes — stabilizes markets but increases national debt concerns".into(),
+            precondition_mode: PreconditionMode::Any,
+            preconditions: vec![
+                NamedCondition {
+                    attribute: "credit_score".into(),
+                    operator: Gt,
+                    value: 650.0,
+                },
+            ],
+            triggered_by: vec!["interest_rate_hike".into()],
+            priority: 25,
+            delay: 1,
+            duration: 2,
+            cooldown: 60,
+            effects: vec![
+                NamedEffect::fixed("stocks", 3000.0),
+                NamedEffect::fixed("bonds", -2000.0),
+                NamedEffect::fixed("debt", 5000.0),
+            ],
+            ..Default::default()
+        },
+        // 14. rental_vacancy
         NamedEvent {
             id: "rental_vacancy".into(),
             label: "Rental property vacancy".into(),
@@ -403,10 +544,9 @@ fn seed_financial_events(store: &Store, schema: &str) -> Result<(), Box<dyn std:
             duration: 3,
             cooldown: 18,
             effects: vec![NamedEffect::fixed("monthly_income", -300.0)],
-            spawns_decision_id: None,
             ..Default::default()
         },
-        // 11. interest_rate_hike
+        // 15. interest_rate_hike
         NamedEvent {
             id: "interest_rate_hike".into(),
             label: "Interest rate hike".into(),
@@ -420,10 +560,9 @@ fn seed_financial_events(store: &Store, schema: &str) -> Result<(), Box<dyn std:
             duration: 2,
             cooldown: 36,
             effects: vec![NamedEffect::fixed("monthly_expenses", 200.0)],
-            spawns_decision_id: None,
             ..Default::default()
         },
-        // 12. medical_emergency
+        // 16. medical_emergency
         NamedEvent {
             id: "medical_emergency".into(),
             label: "Medical emergency".into(),
@@ -436,7 +575,6 @@ fn seed_financial_events(store: &Store, schema: &str) -> Result<(), Box<dyn std:
                 NamedEffect::fixed("cash", -4000.0),
                 NamedEffect::fixed("debt", 4000.0),
             ],
-            spawns_decision_id: None,
             ..Default::default()
         },
     ];
