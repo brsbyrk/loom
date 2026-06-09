@@ -209,7 +209,70 @@ impl DecisionAnalysis {
     }
 }
 
-// ── Tests ────────────────────────────────────────────────────────────────────────────
+// ── Pareto frontier ───────────────────────────────────────────────────────────────────
+
+/// Compute the Pareto frontier — indices of non-dominated alternatives.
+///
+/// Each alternative has a score vector where higher is better in all dimensions.
+/// Alternative `i` dominates `j` if it is at least as good in every dimension
+/// and strictly better in at least one.
+///
+/// # Arguments
+/// * `scores` — list of `(label, score_vector)`, one per alternative.
+///
+/// # Returns
+/// Indices of non-dominated alternatives, sorted.
+///
+/// # Note
+/// Use mean utility from `DecisionAnalysis` for each GoalVector dimension.
+/// Ensure all scores are oriented "higher is better" (negate minimization goals).
+pub fn pareto_frontier(scores: &[(String, Vec<f64>)]) -> Vec<usize> {
+    let n = scores.len();
+    if n <= 1 {
+        return (0..n).collect();
+    }
+
+    let mut dominated = vec![false; n];
+
+    for i in 0..n {
+        if dominated[i] {
+            continue;
+        }
+        for j in 0..n {
+            if i == j || dominated[j] {
+                continue;
+            }
+            if dominates(&scores[i].1, &scores[j].1) {
+                dominated[j] = true;
+            } else if dominates(&scores[j].1, &scores[i].1) {
+                dominated[i] = true;
+                break;
+            }
+        }
+    }
+
+    dominated
+        .iter()
+        .enumerate()
+        .filter(|&(_, d)| !d)
+        .map(|(i, _)| i)
+        .collect()
+}
+
+/// True if `a` dominates `b`: all dims >= and at least one >.
+fn dominates(a: &[f64], b: &[f64]) -> bool {
+    assert_eq!(a.len(), b.len(), "score vectors must have same dimension");
+    let mut strictly_better = false;
+    for i in 0..a.len() {
+        if a[i] < b[i] {
+            return false;
+        }
+        if a[i] > b[i] {
+            strictly_better = true;
+        }
+    }
+    strictly_better
+}
 
 #[cfg(test)]
 mod tests {
@@ -313,5 +376,88 @@ mod tests {
         assert_eq!(analysis.outcome_probabilities, vec![vec![(0, 1.0)]]);
         // Two time steps
         assert_eq!(analysis.utility_over_time.len(), 2);
+    }
+
+    // ── Pareto tests ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn pareto_single_alternative() {
+        let scores = vec![("A".into(), vec![10.0, 20.0])];
+        assert_eq!(pareto_frontier(&scores), vec![0]);
+    }
+
+    #[test]
+    fn pareto_one_dominates() {
+        let scores = vec![
+            ("A".into(), vec![100.0, 50.0]),
+            ("B".into(), vec![50.0, 30.0]),
+        ];
+        // A dominates B in both dimensions
+        assert_eq!(pareto_frontier(&scores), vec![0]);
+    }
+
+    #[test]
+    fn pareto_non_dominated_pair() {
+        let scores = vec![
+            ("wealth".into(), vec![100.0, 20.0]),   // good wealth, bad health
+            ("health".into(), vec![20.0, 100.0]),   // good health, bad wealth
+        ];
+        // Neither dominates the other
+        let frontier = pareto_frontier(&scores);
+        assert_eq!(frontier, vec![0, 1]);
+    }
+
+    #[test]
+    fn pareto_three_with_tradeoff() {
+        // A: high wealth, low health. B: medium both. C: low wealth, high health.
+        let scores = vec![
+            ("A".into(), vec![100.0, 10.0]),
+            ("B".into(), vec![50.0, 50.0]),
+            ("C".into(), vec![10.0, 100.0]),
+        ];
+        // B is dominated by nothing — it's not the best in either dimension
+        // but it's not worse than A in BOTH or C in BOTH. Wait: A dominates B?
+        // A: 100>50 (wealth) but 10<50 (health). No.
+        // C: 10<50 (wealth) but 100>50 (health). No.
+        // So all three are non-dominated. Pareto: {0, 1, 2}
+        assert_eq!(pareto_frontier(&scores), vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn pareto_middle_is_dominated() {
+        // A dominates C in both dimensions. B and C don't dominate each other.
+        // A and B: A is better in both (100>70, 90>60) → A dominates B.
+        // A dominates both. Frontier: only A.
+        let scores = vec![
+            ("A".into(), vec![100.0, 90.0]),
+            ("B".into(), vec![70.0, 60.0]),
+            ("C".into(), vec![50.0, 40.0]),  // dominated by A (and B? B 70>50, 60>40 — yes B dominates C too)
+        ];
+        // A dominates B, A dominates C. B dominates C. Frontier: [0]
+        assert_eq!(pareto_frontier(&scores), vec![0]);
+    }
+
+    #[test]
+    fn pareto_nontrivial_frontier() {
+        // Two dimensions: wealth, health. All higher is better.
+        // A: high wealth, low health. B: low wealth, high health. C: dominated middle.
+        let scores = vec![
+            ("A".into(), vec![95.0, 20.0]),
+            ("B".into(), vec![30.0, 90.0]),
+            ("C".into(), vec![50.0, 40.0]),  // A is better than C in both dims? 95>50, 20<40 — no
+        ];
+        // A (95,20) vs C (50,40): A better wealth but worse health — non-dominated
+        // B (30,90) vs C (50,40): B better health but worse wealth — non-dominated
+        // A vs B: clearly non-dominated
+        // So all three should be frontier
+        assert_eq!(pareto_frontier(&scores), vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn dominates_strictly_better_required() {
+        // a >= b everywhere, but never > — NOT domination
+        assert!(!dominates(&[5.0, 5.0], &[5.0, 5.0]));
+        // a > b in one dim, equal in other — dominates
+        assert!(dominates(&[5.0, 6.0], &[5.0, 5.0]));
     }
 }

@@ -46,7 +46,7 @@ pub use event::{
 pub use events::{determine_firing, ResolvedEvent};
 pub use schema::{AttributeDef, AttributeKind, AttributeSchema, DynamicState, SchemaError};
 pub use distribution::{Distribution, TimeBand};
-pub use scoring::{DecisionAnalysis, GoalVector, Threshold};
+pub use scoring::{DecisionAnalysis, GoalVector, Threshold, pareto_frontier};
 pub use simulation::{Frequency, PassiveEffect, Simulation, SimulationResult};
 pub use traits::{Action, All, Any, OneOf, Predicate, Sequence, Valuation, When};
 pub use named::{
