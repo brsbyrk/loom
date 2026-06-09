@@ -44,6 +44,7 @@ pub fn render(f: &mut Frame, app: &App) {
         Screen::EditEvents => render_edit_events(f, app),
         Screen::EditEventsDetail => render_edit_events_detail(f, app),
         Screen::Dashboard => render_dashboard(f, app),
+        Screen::ForkExplorer => render_fork_explorer(f, app),
     }
 }
 
@@ -2311,12 +2312,145 @@ fn render_dashboard(f: &mut Frame, app: &App) {
         Span::raw("scroll  "),
         Span::styled(" S ", Style::default().fg(ACCENT).bold()),
         Span::raw("simulate  "),
+        Span::styled(" F ", Style::default().fg(ACCENT).bold()),
+        Span::raw("fork  "),
         Span::styled(" R ", Style::default().fg(ACCENT).bold()),
         Span::raw("refresh  "),
         Span::styled(" L ", Style::default().fg(ACCENT).bold()),
         Span::raw("schema  "),
         Span::styled(" Tab ", Style::default().fg(ACCENT).bold()),
         Span::raw("tabs  "),
+        Span::styled(" Q ", Style::default().fg(ACCENT).bold()),
+        Span::raw("quit"),
+    ]))
+    .style(Style::default().bg(HEADER_BG));
+    f.render_widget(footer, inner[2]);
+}
+
+// ── Fork Explorer screen ─────────────────────────────────────────────────────────
+
+fn render_fork_explorer(f: &mut Frame, app: &App) {
+    let area = f.area();
+    let inner = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(0),
+            Constraint::Length(1),
+        ])
+        .split(area);
+    let body = inner[1];
+
+    let mut lines: Vec<Line> = Vec::new();
+
+    // Header
+    lines.push(Line::from(vec![
+        Span::styled(" Fork Explorer: ", Style::default().fg(ACCENT).bold()),
+        Span::styled(
+            &app.fork_explorer_fork_name,
+            Style::default().fg(Color::White),
+        ),
+    ]));
+    lines.push(Line::raw(""));
+
+    // Source snapshot info
+    if let Some(snap_id) = app.fork_explorer_snapshot_id {
+        lines.push(Line::from(Span::styled(
+            format!(" Forked from snapshot #{snap_id}"),
+            Style::default().fg(DIM),
+        )));
+    }
+    lines.push(Line::raw(""));
+
+    // Comparison table
+    if app.fork_explorer_results.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  No comparison results.",
+            Style::default().fg(DIM),
+        )));
+    } else {
+        lines.push(Line::from(Span::styled(
+            " Decision          Utility    Top Attribute Deltas",
+            Style::default().fg(DIM),
+        )));
+        lines.push(Line::from(Span::styled(
+            " ────────────────  ─────────  ──────────────────────",
+            Style::default().fg(DIM),
+        )));
+
+        for (i, (label, analysis)) in app.fork_explorer_results.iter().enumerate() {
+            let is_selected = i == app.fork_explorer_idx;
+            let cursor = if is_selected { " >" } else { "  " };
+            let style = if is_selected {
+                Style::default().fg(ACCENT).bold()
+            } else {
+                Style::default().fg(Color::White)
+            };
+
+            let util_str = if analysis.utility_distribution.mean >= 0.0 {
+                format!("+{:.1}", analysis.utility_distribution.mean)
+            } else {
+                format!("{:.1}", analysis.utility_distribution.mean)
+            };
+
+            // Compute top attribute deltas (attribute changes from current state)
+            let mut deltas: Vec<(String, f64)> = Vec::new();
+            for (j, attr) in app.schema.attributes.iter().enumerate() {
+                if j < analysis.attribute_outcomes.len() {
+                    let current = app.current_state.get(&attr.name).unwrap_or(0.0);
+                    let outcome_mean = analysis.attribute_outcomes[j].mean;
+                    let delta = outcome_mean - current;
+                    if delta.abs() > 0.5 {
+                        deltas.push((attr.name.clone(), delta));
+                    }
+                }
+            }
+            // Sort by absolute delta descending, take top 3
+            deltas.sort_by(|a, b| b.1.abs().partial_cmp(&a.1.abs()).unwrap_or(std::cmp::Ordering::Equal));
+            deltas.truncate(3);
+
+            let delta_str: String = deltas
+                .iter()
+                .map(|(name, d)| {
+                    let sign = if *d >= 0.0 { "+" } else { "" };
+                    format!("{name} {sign}{d:.1}")
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+
+            let delta_display = if delta_str.is_empty() {
+                "(no significant changes)".to_string()
+            } else {
+                delta_str
+            };
+
+            lines.push(Line::from(vec![
+                Span::styled(cursor, style),
+                Span::styled(format!(" {:<16} ", label), style),
+                Span::styled(format!(" {:<9} ", util_str), style),
+                Span::styled(delta_display, Style::default().fg(DIM)),
+            ]));
+        }
+    }
+
+    let block = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .title(" Fork Explorer ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(ACCENT)),
+        )
+        .wrap(Wrap { trim: false });
+    f.render_widget(block, body);
+
+    // Footer
+    let footer = Paragraph::new(Line::from(vec![
+        Span::styled(" ↑↓/jk ", Style::default().fg(ACCENT).bold()),
+        Span::raw("navigate  "),
+        Span::styled(" Enter ", Style::default().fg(ACCENT).bold()),
+        Span::raw("apply to master  "),
+        Span::styled(" Esc ", Style::default().fg(ACCENT).bold()),
+        Span::raw("cancel  "),
         Span::styled(" Q ", Style::default().fg(ACCENT).bold()),
         Span::raw("quit"),
     ]))

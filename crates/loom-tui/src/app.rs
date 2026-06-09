@@ -51,6 +51,8 @@ pub enum Screen {
     EditEvents,
     /// Edit a single event's fields.
     EditEventsDetail,
+    /// Fork explorer — compare alternatives before committing to master timeline.
+    ForkExplorer,
 }
 
 /// Scroll state for scrollable content.
@@ -251,6 +253,16 @@ pub struct App {
     /// Index into forks list.
     pub fork_idx: usize,
     /// Input buffer for timeline/snapshot creation prompts.
+
+    // ── Fork Explorer state ──────────────────────────────────────────────────
+    /// Results from batch_compare: (decision_label, analysis)
+    pub fork_explorer_results: Vec<(String, loom_core::DecisionAnalysis)>,
+    /// Currently highlighted result index.
+    pub fork_explorer_idx: usize,
+    /// Snapshot ID the fork was created from (for applying).
+    pub fork_explorer_snapshot_id: Option<i64>,
+    /// Name of the fork timeline created for exploration.
+    pub fork_explorer_fork_name: String,
     pub input_buffer: String,
     /// Prompt label when in input mode.
     pub input_prompt: String,
@@ -364,6 +376,10 @@ impl App {
             dashboard_projects: Vec::new(),
             dashboard_recent: Vec::new(),
             dashboard_scroll: 0,
+            fork_explorer_results: Vec::new(),
+            fork_explorer_idx: 0,
+            fork_explorer_snapshot_id: None,
+            fork_explorer_fork_name: String::new(),
         }
     }
 
@@ -410,9 +426,59 @@ impl App {
         // Initialize default state BEFORE refreshing dashboard (needed for simulation)
         self.init_default_state();
 
+        // ── Master timeline anchoring ─────────────────────────────────────────
+        // Ensure a "master" timeline exists for this schema, then load its
+        // latest snapshot as current_state so the dashboard reflects reality.
+        self.ensure_master_timeline();
+
         self.refresh_dashboard();
 
         Ok(())
+    }
+
+    /// Create a "master" timeline for the current schema if none exists,
+    /// then load its latest snapshot state into `current_state`.
+    fn ensure_master_timeline(&mut self) {
+        let ts = TimelineStore::new(&self.store.conn);
+        // Find or create master timeline
+        let master_id = if let Ok(timelines) = ts.list_timelines() {
+            if let Some(tl) = timelines.iter().find(|t| t.name == "master") {
+                tl.id
+            } else {
+                // Find the schema ID for the current schema
+                let schema_id = self
+                    .schema_list
+                    .iter()
+                    .find(|s| s.name == self.schema_name)
+                    .map(|s| s.id);
+                match schema_id {
+                    Some(sid) => ts.create_timeline("master", sid).unwrap_or(0),
+                    None => 0,
+                }
+            }
+        } else {
+            0
+        };
+
+        if master_id == 0 {
+            return;
+        }
+
+        self.active_timeline_id = Some(master_id);
+        self.active_timeline_name = "master".to_string();
+        self.active_timeline_schema_name = self.schema_name.clone();
+
+        // Load snapshots and set current_state from latest
+        self.load_snapshots(master_id);
+        if !self.snapshots.is_empty() {
+            let last = &self.snapshots[self.snapshots.len() - 1];
+            let values: Vec<f64> =
+                serde_json::from_str(&last.attributes_json).unwrap_or_default();
+            if values.len() == self.schema.dimension() {
+                self.current_state =
+                    DynamicState::from_vec(values, self.schema.clone());
+            }
+        }
     }
 
     /// Set default initial state values for the current schema.
@@ -1173,18 +1239,145 @@ impl App {
             if let Ok(statuses) = ts.get_active_events_status(timeline_id) {
                 self.active_events_status = statuses
                     .iter()
-                    .map(|(label, phase, remaining, _total, _cooldown)| {
-                        match phase.as_str() {
+                    .map(
+                        |(label, phase, remaining, _total, _cooldown)| match phase.as_str() {
                             "pending" => format!("⏳ {} pending ({} steps)", label, remaining),
                             "active" => format!("🚗 {} active ({}/?)", label, remaining),
                             "cooldown" => format!("🕐 {} cooldown ({} steps)", label, remaining),
                             _ => format!("{}: {}", label, phase),
-                        }
-                    })
+                        },
+                    )
                     .collect();
             }
         } else {
             self.active_events_status.clear();
         }
+    }
+
+    // ── Fork Explorer ─────────────────────────────────────────────────────────
+
+    /// Open the fork explorer for the currently highlighted dashboard decision.
+    ///
+    /// Creates a fork from the master timeline at HEAD, runs batch comparison
+    /// for this decision + a few top alternatives, and shows the comparison screen.
+    pub fn open_fork_explorer(&mut self) {
+        // 1. Get highlighted decision from dashboard
+        if self.dashboard_decisions.is_empty()
+            || self.dashboard_scroll >= self.dashboard_decisions.len()
+        {
+            return;
+        }
+        let (decision_idx, decision_label, _, _) =
+            &self.dashboard_decisions[self.dashboard_scroll];
+        let decision_idx = *decision_idx;
+        let decision_label = decision_label.clone();
+
+        if decision_idx >= self.decisions.len() {
+            return;
+        }
+
+        // 2. Get master timeline ID
+        let master_id = match self.active_timeline_id {
+            Some(id) => id,
+            None => return,
+        };
+
+        // 3. Get the HEAD snapshot of master for forking
+        self.load_snapshots(master_id);
+        let head_snapshot_id = match self.snapshots.last() {
+            Some(s) => s.id,
+            None => {
+                // No snapshots yet — create one from current state
+                let entry = format!("Initial state ({})", self.schema_name);
+                let values = self.current_state.as_slice().to_vec();
+                let ts = TimelineStore::new(&self.store.conn);
+                let sid = ts
+                    .append_snapshot(master_id, None, &entry, &values)
+                    .unwrap_or(0);
+                self.load_snapshots(master_id);
+                if sid == 0 {
+                    return;
+                }
+                sid
+            }
+        };
+
+        // 4. Create a fork from master at HEAD
+        let fork_name = format!("fork: {}", decision_label);
+        let ts = TimelineStore::new(&self.store.conn);
+        let _child_id = ts
+            .fork_timeline(master_id, head_snapshot_id, &fork_name, &decision_label)
+            .unwrap_or(0);
+
+        // 5. Build list of decisions to compare: highlighted decision + top alternatives
+        let mut compare_decisions: Vec<(String, &loom_core::Decision)> = Vec::new();
+        // Always include the highlighted one first
+        let current_decision = &self.decisions[decision_idx];
+        compare_decisions.push((decision_label.clone(), current_decision));
+
+        // Add top N available alternatives (skip the highlighted one)
+        let n_alternatives = 4usize;
+        for (_, label, _, available) in &self.dashboard_decisions {
+            if compare_decisions.len() > n_alternatives {
+                break;
+            }
+            if *label == decision_label {
+                continue;
+            }
+            if !available {
+                continue;
+            }
+            // Find the decision object
+            if let Some(d) = self.decisions.iter().find(|d| d.label == *label) {
+                compare_decisions.push((label.clone(), d));
+            }
+        }
+
+        // 6. Run batch comparison
+        let batch_results = loom_core::batch_compare(
+            &self.current_state,
+            &compare_decisions,
+            &self.passives,
+            &[], // events not clonable
+            &self.goal,
+            self.sim_config.horizon,
+            self.sim_config.runs,
+        );
+
+        // 7. Switch to fork explorer screen
+        self.fork_explorer_results = batch_results;
+        self.fork_explorer_idx = 0;
+        self.fork_explorer_snapshot_id = Some(head_snapshot_id);
+        self.fork_explorer_fork_name = fork_name;
+        self.screen = Screen::ForkExplorer;
+    }
+
+    /// Apply the selected fork explorer decision to the master timeline:
+    /// append a snapshot to master with the decision label as entry text,
+    /// then refresh dashboard and return to it.
+    pub fn apply_fork_decision(&mut self) {
+        if self.fork_explorer_results.is_empty()
+            || self.fork_explorer_idx >= self.fork_explorer_results.len()
+        {
+            return;
+        }
+
+        let master_id = match self.active_timeline_id {
+            Some(id) => id,
+            None => return,
+        };
+
+        let decision_label = &self.fork_explorer_results[self.fork_explorer_idx].0;
+        let entry_text = format!("Decision: {}", decision_label);
+        let values = self.current_state.as_slice().to_vec();
+        let parent_id = self.snapshots.last().map(|s| s.id);
+
+        let ts = TimelineStore::new(&self.store.conn);
+        let _ = ts.append_snapshot(master_id, parent_id, &entry_text, &values);
+
+        // Refresh and return to dashboard
+        self.load_snapshots(master_id);
+        self.screen = Screen::Dashboard;
+        self.refresh_dashboard();
     }
 }

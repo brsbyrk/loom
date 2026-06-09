@@ -109,6 +109,7 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App) -> Result<(), Box<dyn std:
                 Screen::EditEvents => handle_edit_events(app, key.code),
                 Screen::EditEventsDetail => handle_edit_events_detail(app, key.code),
                 Screen::Dashboard => handle_dashboard(app, key.code),
+                Screen::ForkExplorer => handle_fork_explorer(app, key.code),
             }
         }
     }
@@ -1200,6 +1201,9 @@ fn handle_dashboard(app: &mut App, code: KeyCode) {
         KeyCode::Char('r') | KeyCode::Char('R') => {
             app.refresh_dashboard();
         }
+        KeyCode::Char('f') | KeyCode::Char('F') => {
+            app.open_fork_explorer();
+        }
         KeyCode::Up | KeyCode::Char('k') => {
             if app.dashboard_scroll > 0 {
                 app.dashboard_scroll -= 1;
@@ -1208,6 +1212,31 @@ fn handle_dashboard(app: &mut App, code: KeyCode) {
         KeyCode::Down | KeyCode::Char('j') => {
             if app.dashboard_scroll + 1 < app.dashboard_decisions.len() {
                 app.dashboard_scroll += 1;
+            }
+        }
+        _ => {}
+    }
+}
+
+// ── Fork Explorer handler ────────────────────────────────────────────────────
+
+fn handle_fork_explorer(app: &mut App, code: KeyCode) {
+    match code {
+        KeyCode::Char('q') | KeyCode::Char('Q') => std::process::exit(0),
+        KeyCode::Esc => {
+            app.screen = Screen::Dashboard;
+        }
+        KeyCode::Enter => {
+            app.apply_fork_decision();
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            if app.fork_explorer_idx > 0 {
+                app.fork_explorer_idx -= 1;
+            }
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            if app.fork_explorer_idx + 1 < app.fork_explorer_results.len() {
+                app.fork_explorer_idx += 1;
             }
         }
         _ => {}

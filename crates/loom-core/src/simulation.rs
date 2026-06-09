@@ -18,7 +18,7 @@
 use crate::event::{Decision, Outcome, Project, ActiveProject};
 use crate::events::ResolvedEvent;
 use crate::schema::DynamicState;
-use crate::scoring::GoalVector;
+use crate::scoring::{DecisionAnalysis, GoalVector};
 use crate::traits::{Action, All, Predicate, Sequence, Valuation};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
@@ -648,6 +648,53 @@ impl Simulation {
         let result = self.run(initial_state, decision, goal);
         crate::scoring::DecisionAnalysis::from_result(&result)
     }
+}
+
+// ── Batch comparison ─────────────────────────────────────────────────────────────────
+
+/// Simulate N decisions against the same state, with shared passives.
+///
+/// Creates a fresh `Simulation` for each decision, runs the full Monte Carlo
+/// analysis, and returns ranked results sorted by mean utility descending.
+///
+/// # Parameters
+/// * `state` — initial state all decisions are evaluated against
+/// * `decisions` — slice of `(label, decision)` pairs to compare
+/// * `passives` — passive effects shared across all simulations
+/// * `events` — resolved event templates (accepted but not cloned — each simulation
+///   gets an empty event set, since `ResolvedEvent` uses non-Clone trait objects)
+/// * `goal` — goal vector for scoring
+/// * `horizon` — simulation horizon in steps
+/// * `runs` — number of Monte Carlo runs per decision
+pub fn batch_compare(
+    state: &DynamicState,
+    decisions: &[(String, &Decision)],
+    passives: &[PassiveEffect],
+    _events: &[ResolvedEvent],
+    goal: &GoalVector,
+    horizon: usize,
+    runs: usize,
+) -> Vec<(String, DecisionAnalysis)> {
+    let mut results: Vec<(String, DecisionAnalysis)> = Vec::with_capacity(decisions.len());
+
+    for (label, decision) in decisions {
+        let mut sim = Simulation::new(horizon, runs);
+        sim.passives = passives.to_vec();
+        // Events left empty: ResolvedEvent contains Box<dyn Predicate/Box<dyn Action>
+        // trait objects that don't implement Clone.
+        let analysis = sim.run_and_analyze(state, decision, goal);
+        results.push((label.clone(), analysis));
+    }
+
+    // Sort by utility distribution mean descending
+    results.sort_by(|a, b| {
+        b.1.utility_distribution
+            .mean
+            .partial_cmp(&a.1.utility_distribution.mean)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    results
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────────────
