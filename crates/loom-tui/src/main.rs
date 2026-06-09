@@ -17,9 +17,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let store = Store::open_default()?;
     let schema_list = store.list_schemas()?;
 
-    // ── App (start in timeline browser) ─────────────────────────────────────────
+    // ── App (start with dashboard if schemas exist) ────────────────────────────
     let mut app = App::new_browsing(store, schema_list);
     app.load_timelines();
+
+    // Auto-load first schema on startup so dashboard has data
+    if !app.schema_list.is_empty() {
+        let name = app.schema_list[0].name.clone();
+        let _ = app.load_schema(&name);
+        app.screen = Screen::Dashboard;
+        app.refresh_dashboard();
+    }
 
     // ── Terminal ─────────────────────────────────────────────────────────────────
     let mut terminal = ratatui::init();
@@ -130,7 +138,8 @@ fn handle_schema_list(app: &mut App, code: KeyCode) {
                 match app.load_schema(&name) {
                     Ok(()) => {
                         app.selected_idx = 0;
-                        app.screen = Screen::List;
+                        app.screen = Screen::Dashboard;
+                        app.refresh_dashboard();
                     }
                     Err(e) => app.screen = Screen::Error(e),
                 }
