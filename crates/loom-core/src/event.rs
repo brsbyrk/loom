@@ -402,6 +402,59 @@ impl DecisionSchedule {
     }
 }
 
+// ── Projects (timed decisions) ─────────────────────────────────────────────────────
+
+/// A player-initiated project — ticks over N steps, applies effects on completion,
+/// and can be interrupted by events.
+///
+/// Unlike Decisions (instant) and Events (automatic), Projects are consciously
+/// started by the player and take time to complete.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Project {
+    /// Unique identifier.
+    pub id: String,
+    /// Human-readable label.
+    pub label: String,
+    /// Conditions that must all hold for this project to be available.
+    #[serde(default)]
+    pub preconditions: Vec<Condition>,
+    /// Immediate cost paid when starting the project.
+    #[serde(default)]
+    pub cost: Vec<AttributeEffect>,
+    /// Steps required to complete (minimum 1).
+    pub duration: usize,
+    /// Effects applied when the project completes successfully.
+    pub on_complete: Transform,
+    /// Optional interruption config. When None, the project cannot be interrupted.
+    #[serde(default)]
+    pub interrupt: Option<InterruptConfig>,
+}
+
+/// Configuration for what interrupts a project and what happens.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct InterruptConfig {
+    /// Event IDs (engine indices after resolution) that interrupt this project.
+    pub event_ids: Vec<usize>,
+    /// Applied when the project is interrupted.
+    pub on_interrupt: Transform,
+}
+
+/// Active project tracking during simulation.
+#[derive(Debug, Clone)]
+pub struct ActiveProject {
+    /// Index into the projects array.
+    pub project_id: usize,
+    /// Steps remaining until completion.
+    pub remaining: usize,
+}
+
+impl Project {
+    /// Check if preconditions are met.
+    pub fn available(&self, state: &[f64]) -> bool {
+        self.preconditions.iter().all(|c| c.check(state))
+    }
+}
+
 // ── Tests ────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

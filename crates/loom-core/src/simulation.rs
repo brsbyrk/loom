@@ -15,7 +15,7 @@
 //!     }
 //! ```
 
-use crate::event::{Decision, Outcome};
+use crate::event::{Decision, Outcome, Project, ActiveProject};
 use crate::events::ResolvedEvent;
 use crate::schema::DynamicState;
 use crate::scoring::GoalVector;
@@ -164,6 +164,12 @@ pub struct Simulation {
     /// other events.
     #[allow(dead_code)]
     pub events: Vec<ResolvedEvent>,
+
+    /// Available projects.
+    pub projects: Vec<Project>,
+
+    /// Currently active projects.
+    pub active_projects: Vec<ActiveProject>,
 }
 
 impl Simulation {
@@ -174,6 +180,8 @@ impl Simulation {
             monte_carlo_runs,
             passives: Vec::new(),
             events: Vec::new(),
+            projects: Vec::new(),
+            active_projects: Vec::new(),
         }
     }
 
@@ -193,7 +201,7 @@ impl Simulation {
     ///    c. Record utility via `goal.utility(&state)`
     /// 8. Record final state
     pub fn run(
-        &self,
+        &mut self,
         initial_state: &DynamicState,
         decision: &Decision,
         goal: &GoalVector,
@@ -272,7 +280,7 @@ impl Simulation {
     /// * `outcomes` — weighted branches: `(weight, optional_guard, action)`
     /// * `valuation` — scores state after each step
     pub fn run_dynamic(
-        &self,
+        &mut self,
         initial_state: &DynamicState,
         precondition: &dyn Predicate,
         cost: &dyn Action,
@@ -310,7 +318,7 @@ impl Simulation {
             outcomes[outcome_idx].2.apply(&mut state);
 
             // 5. Clamp after decision
-            self.clamp_state(&mut state, initial_state);
+            Self::clamp_state(&mut state, initial_state);
 
             // 6. Forward simulation
             let mut run_utility = Vec::with_capacity(self.horizon + 1);
@@ -332,20 +340,19 @@ impl Simulation {
                 }
 
                 // Clamp after passives
-                self.clamp_state(&mut state, initial_state);
+                Self::clamp_state(&mut state, initial_state);
 
                 // --- Event firing (pure core shared with TimelineStore) ---
+                let mut fired_this_step: HashSet<usize> = HashSet::new();
                 if !self.events.is_empty() {
-                    let firing_order =
-                        crate::events::determine_firing(
-                            &self.events,
-                            &state,
-                            &active_ids,
-                            &fired_prev,
-                            &resolved_prev,
-                        );
+                    let firing_order = crate::events::determine_firing(
+                        &self.events,
+                        &state,
+                        &active_ids,
+                        &fired_prev,
+                        &resolved_prev,
+                    );
 
-                    let mut fired_this_step: HashSet<usize> = HashSet::new();
                     for &evt_idx in &firing_order {
                         let evt = &self.events[evt_idx];
                         for action in &evt.effects {
@@ -355,11 +362,49 @@ impl Simulation {
                     }
 
                     // Clamp after event effects
-                    self.clamp_state(&mut state, initial_state);
+                    Self::clamp_state(&mut state, initial_state);
 
                     // Update tracking for next step
-                    fired_prev = fired_this_step;
+                    fired_prev = fired_this_step.clone();
                     active_ids = fired_prev.clone(); // events remain active for one step
+                }
+
+                // --- Project tick (advance timed decisions) ---
+                if !self.active_projects.is_empty() {
+                    let mut completed: Vec<usize> = Vec::new();
+                    let mut interrupted: Vec<usize> = Vec::new();
+
+                    for ap in &mut self.active_projects {
+                        if ap.remaining == 0 {
+                            continue; // already completed, awaiting cleanup
+                        }
+
+                        // Check interruption: did any event fire this step that interrupts this project?
+                        let project = &self.projects[ap.project_id];
+                        if let Some(ref ic) = project.interrupt {
+                            let was_interrupted = ic.event_ids.iter().any(|eid| fired_this_step.contains(eid));
+                            if was_interrupted {
+                                ic.on_interrupt.apply(&mut state);
+                                Self::clamp_state(&mut state, initial_state);
+                                interrupted.push(ap.project_id);
+                                continue;
+                            }
+                        }
+
+                        ap.remaining = ap.remaining.saturating_sub(1);
+                        if ap.remaining == 0 {
+                            // Project completed!
+                            project.on_complete.apply(&mut state);
+                            Self::clamp_state(&mut state, initial_state);
+                            completed.push(ap.project_id);
+                        }
+                    }
+
+                    // Clean up completed/interrupted projects from active list
+                    self.active_projects.retain(|ap| {
+                        !completed.contains(&ap.project_id)
+                            && !interrupted.contains(&ap.project_id)
+                    });
                 }
 
                 // Record utility
@@ -435,7 +480,7 @@ impl Simulation {
     /// 4. Clamp state
     /// 5. Record utility
     pub fn run_schedule(
-        &self,
+        &mut self,
         initial_state: &DynamicState,
         schedule: &crate::event::DecisionSchedule,
         goal: &GoalVector,
@@ -492,7 +537,7 @@ impl Simulation {
                         .apply(&mut state);
 
                     // Clamp
-                    self.clamp_state(&mut state, initial_state);
+                    Self::clamp_state(&mut state, initial_state);
                 }
 
                 if aborted {
@@ -505,7 +550,7 @@ impl Simulation {
                         passive.apply(&mut state);
                     }
                 }
-                self.clamp_state(&mut state, initial_state);
+                Self::clamp_state(&mut state, initial_state);
 
                 // 3. Record utility
                 run_utility.push(goal.utility(&state));
@@ -581,7 +626,7 @@ impl Simulation {
     }
 
     /// Apply attribute bounds clamping from the schema.
-    fn clamp_state(&self, state: &mut [f64], dynamic_state: &DynamicState) {
+    fn clamp_state(state: &mut [f64], dynamic_state: &DynamicState) {
         let schema = dynamic_state.schema();
         for (i, attr) in schema.attributes.iter().enumerate() {
             if let Some((min, max)) = attr.bounds {
@@ -595,7 +640,7 @@ impl Simulation {
     /// Convenience method that calls [`Self::run`] and then computes
     /// [`DecisionAnalysis`](crate::DecisionAnalysis) from the raw output.
     pub fn run_and_analyze(
-        &self,
+        &mut self,
         initial_state: &DynamicState,
         decision: &Decision,
         goal: &GoalVector,
@@ -610,7 +655,8 @@ impl Simulation {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event::{AttributeEffect, Condition, ComparisonOp, Decision, Outcome, Transform};
+    use crate::event::{AttributeEffect, ComparisonOp, Condition, Decision, InterruptConfig,
+        Outcome, Transform};
     use crate::schema::AttributeSchema;
     use std::sync::Arc;
 
@@ -652,7 +698,7 @@ mod tests {
         let schema = test_schema();
         let initial = DynamicState::from_vec(vec![1000.0, 100.0, 0.0], schema);
         let decision = test_decision();
-        let sim = Simulation::new(5, 10);
+        let mut sim = Simulation::new(5, 10);
         let goal = GoalVector::linear(vec![1.0, 0.5, -0.3]); // wealth+, health+, stress-
 
         let result = sim.run(&initial, &decision, &goal);
@@ -683,7 +729,7 @@ mod tests {
             cost: vec![],
             outcomes: vec![],
         };
-        let sim = Simulation::new(5, 10);
+        let mut sim = Simulation::new(5, 10);
         let goal = GoalVector::linear(vec![1.0, 0.5, -0.3]);
 
         let result = sim.run(&initial, &decision, &goal);
@@ -715,7 +761,7 @@ mod tests {
                 },
             ],
         };
-        let sim = Simulation::new(1, 1000);
+        let mut sim = Simulation::new(1, 1000);
         let goal = GoalVector::linear(vec![1.0, 0.0, 0.0]);
 
         let result = sim.run(&initial, &decision, &goal);
@@ -757,7 +803,7 @@ mod tests {
                 },
             ],
         };
-        let sim = Simulation::new(1, 100);
+        let mut sim = Simulation::new(1, 100);
         let goal = GoalVector::linear(vec![1.0, 0.0, 0.0]);
 
         let result = sim.run(&initial, &decision, &goal);
@@ -833,7 +879,7 @@ mod tests {
                 transform: Transform::simple(vec![AttributeEffect::fixed(1, 20.0)]),
             }],
         };
-        let sim = Simulation::new(1, 1);
+        let mut sim = Simulation::new(1, 1);
         let goal = GoalVector::linear(vec![0.0, 1.0, 0.0]);
 
         let result = sim.run(&initial, &decision, &goal);
@@ -845,12 +891,97 @@ mod tests {
         let schema = test_schema();
         let initial = DynamicState::from_vec(vec![1000.0, 100.0, 0.0], schema);
         let decision = test_decision();
-        let sim = Simulation::new(24, 1);
+        let mut sim = Simulation::new(24, 1);
         let goal = GoalVector::linear(vec![1.0, 0.5, -0.3]);
 
         let result = sim.run(&initial, &decision, &goal);
 
         // Horizon 24: step 0 (post-decision) + 24 forward steps = 25 entries
         assert_eq!(result.utility_traces[0].len(), 25);
+    }
+
+    #[test]
+    fn project_completes_after_duration() {
+        let schema = test_schema();
+        let initial = DynamicState::from_vec(vec![0.0, 100.0, 0.0], schema);
+        let decision = test_decision(); // +100 to wealth[0]
+        let mut sim = Simulation::new(3, 1);
+        sim.projects.push(Project {
+            id: "learn_rust".into(),
+            label: "Learn Rust".into(),
+            preconditions: vec![],
+            cost: vec![],
+            duration: 2,
+            on_complete: Transform::simple(vec![AttributeEffect::fixed(2, 50.0)]), // +50 to stress[2]
+            interrupt: None,
+        });
+        sim.active_projects.push(ActiveProject {
+            project_id: 0,
+            remaining: 2,
+        });
+        let goal = GoalVector::linear(vec![1.0, 0.0, 0.0]);
+
+        let result = sim.run(&initial, &decision, &goal);
+        let final_state = &result.final_states[0];
+
+        // Wealth: 0 + 100 (decision outcome) = 100
+        assert!((final_state[0] - 100.0).abs() < f64::EPSILON);
+        // Stress: 0 + 50 (project completes at step 2) = 50
+        assert!((final_state[2] - 50.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn project_interrupted_by_event() {
+        use crate::events::ResolvedEvent;
+        use crate::traits::All;
+
+        let schema = test_schema();
+        let initial = DynamicState::from_vec(vec![0.0, 100.0, 0.0], schema);
+        let decision = test_decision();
+        let mut sim = Simulation::new(3, 1);
+
+        // Add an event that fires every step (precondition always true)
+        sim.events.push(ResolvedEvent {
+            id: 0,
+            label: "disaster".into(),
+            precondition: Box::new(All(vec![])),
+            effects: vec![Box::new(AttributeEffect::fixed(1, -5.0))], // -5 health
+            triggered_by: vec![],
+            suppressed_by: vec![],
+            priority: 0,
+            delay: 0,
+            duration: 0,
+            cooldown: 0,
+            triggers_event_id: None,
+            triggers_on_resolve_id: None,
+        });
+
+        // Add a project that is interrupted by event 0
+        sim.projects.push(Project {
+            id: "fragile".into(),
+            label: "Fragile Project".into(),
+            preconditions: vec![],
+            cost: vec![],
+            duration: 3,
+            on_complete: Transform::simple(vec![AttributeEffect::fixed(0, 1000.0)]),
+            interrupt: Some(InterruptConfig {
+                event_ids: vec![0],
+                on_interrupt: Transform::simple(vec![AttributeEffect::fixed(2, 30.0)]), // +30 stress
+            }),
+        });
+        sim.active_projects.push(ActiveProject {
+            project_id: 0,
+            remaining: 3,
+        });
+        let goal = GoalVector::linear(vec![1.0, 0.0, -1.0]);
+
+        let result = sim.run(&initial, &decision, &goal);
+        let final_state = &result.final_states[0];
+
+        // Project should be interrupted (event 0 fires every step)
+        // Stress should be +30 from interrupt effect
+        assert!((final_state[2] - 30.0).abs() < f64::EPSILON);
+        // Wealth should NOT get the +1000 completion bonus
+        assert!((final_state[0] - 100.0).abs() < f64::EPSILON); // just the decision outcome
     }
 }

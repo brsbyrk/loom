@@ -54,11 +54,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     state.set("time_free", 40.0);
 
     // ── Simulation ───────────────────────────────────────────────────────────────
-    let sim = Simulation {
+    let mut sim = Simulation {
         horizon: 24,
         monte_carlo_runs: 1000,
         passives,
         events: Vec::new(),
+        projects: Vec::new(),
+        active_projects: Vec::new(),
     };
 
     let analysis = sim.run_and_analyze(&state, &decision, &goal);

@@ -41,7 +41,7 @@ pub mod traits;
 pub use state::StateVector;
 pub use event::{
     AttributeEffect, ComparisonOp, Condition, Decision, DecisionSchedule, Event, Outcome,
-    ScheduledDecision, ScriptSource, Transform,
+    Project, InterruptConfig, ActiveProject, ScheduledDecision, ScriptSource, Transform,
 };
 pub use events::{determine_firing, ResolvedEvent};
 pub use schema::{AttributeDef, AttributeKind, AttributeSchema, DynamicState, SchemaError};
@@ -51,6 +51,6 @@ pub use simulation::{Frequency, PassiveEffect, Simulation, SimulationResult};
 pub use traits::{Action, All, Any, OneOf, Predicate, Sequence, Valuation, When};
 pub use named::{
     NamedCondition, NamedDecision, NamedDecisionSchedule, NamedEffect, NamedFrequency,
-    NamedGoalVector, NamedOutcome, NamedPassiveEffect, NamedScheduledDecision, NamedTransform,
-    ResolveError,
+    NamedGoalVector, NamedInterruptConfig, NamedOutcome, NamedPassiveEffect, NamedProject,
+    NamedScheduledDecision, NamedTransform, ResolveError,
 };

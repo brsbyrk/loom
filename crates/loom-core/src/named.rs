@@ -471,6 +471,68 @@ impl NamedDecisionSchedule {
     }
 }
 
+// ── NamedProject ──────────────────────────────────────────────────────────────────
+
+use crate::event::Project;
+
+/// Named version of Project — uses attribute names, resolved to indices via schema.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct NamedProject {
+    pub id: String,
+    pub label: String,
+    #[serde(default)]
+    pub preconditions: Vec<NamedCondition>,
+    #[serde(default)]
+    pub cost: Vec<NamedEffect>,
+    pub duration: usize,
+    pub on_complete: NamedTransform,
+    #[serde(default)]
+    pub interrupt: Option<NamedInterruptConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct NamedInterruptConfig {
+    /// Event IDs (by name — resolved to indices at resolve time).
+    pub event_ids: Vec<String>,
+    pub on_interrupt: NamedTransform,
+}
+
+impl NamedProject {
+    pub fn resolve(&self, schema: &AttributeSchema) -> Result<Project, ResolveError> {
+        let preconditions = self
+            .preconditions
+            .iter()
+            .map(|c| c.resolve(schema))
+            .collect::<Result<Vec<_>, _>>()?;
+        let cost = resolve_effects(&self.cost, schema)?;
+        let on_complete = self.on_complete.resolve(schema)?;
+        let interrupt = match &self.interrupt {
+            Some(ic) => {
+                let ids = ic
+                    .event_ids
+                    .iter()
+                    .map(|name| resolve_attr(schema, name))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let on_interrupt = ic.on_interrupt.resolve(schema)?;
+                Some(crate::event::InterruptConfig {
+                    event_ids: ids,
+                    on_interrupt,
+                })
+            }
+            None => None,
+        };
+        Ok(Project {
+            id: self.id.clone(),
+            label: self.label.clone(),
+            preconditions,
+            cost,
+            duration: self.duration,
+            on_complete,
+            interrupt,
+        })
+    }
+}
+
 // ── Tests ────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -665,5 +727,69 @@ mod tests {
         assert_eq!(passive.id, "stress_decay");
         assert_eq!(passive.effects[0].attribute_index, 1);
         assert_eq!(passive.effects[0].delta, -2.0);
+    }
+
+    #[test]
+    fn resolve_named_project() {
+        let schema = test_schema();
+        let json = r#"{
+            "id": "learn_rust",
+            "label": "Learn Rust",
+            "duration": 10,
+            "preconditions": [
+                {"attribute": "skills.rust", "operator": "Lt", "value": 50}
+            ],
+            "cost": [
+                {"attribute": "health.stress", "delta": 10}
+            ],
+            "on_complete": {
+                "type": "declarative",
+                "effects": [
+                    {"attribute": "skills.rust", "delta": 30}
+                ]
+            }
+        }"#;
+        let named: NamedProject = serde_json::from_str(json).unwrap();
+        let project = named.resolve(&schema).unwrap();
+
+        assert_eq!(project.id, "learn_rust");
+        assert_eq!(project.label, "Learn Rust");
+        assert_eq!(project.duration, 10);
+        assert_eq!(project.preconditions.len(), 1);
+        assert_eq!(project.preconditions[0].attribute_index, 2); // skills.rust
+        assert_eq!(project.cost.len(), 1);
+        assert_eq!(project.cost[0].attribute_index, 1); // health.stress
+        assert_eq!(project.cost[0].delta, 10.0);
+        assert!(project.interrupt.is_none());
+    }
+
+    #[test]
+    fn resolve_named_project_with_interrupt() {
+        let schema = test_schema();
+        let json = r#"{
+            "id": "fragile_project",
+            "label": "Fragile",
+            "duration": 5,
+            "on_complete": {
+                "type": "declarative",
+                "effects": []
+            },
+            "interrupt": {
+                "event_ids": ["health.stress"],
+                "on_interrupt": {
+                    "type": "declarative",
+                    "effects": [
+                        {"attribute": "health.stress", "delta": 20}
+                    ]
+                }
+            }
+        }"#;
+        let named: NamedProject = serde_json::from_str(json).unwrap();
+        let project = named.resolve(&schema).unwrap();
+
+        assert_eq!(project.id, "fragile_project");
+        assert_eq!(project.duration, 5);
+        let ic = project.interrupt.as_ref().unwrap();
+        assert_eq!(ic.event_ids, vec![1]); // health.stress is index 1
     }
 }
