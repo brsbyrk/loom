@@ -168,6 +168,31 @@ impl Store {
                 UNIQUE(timeline_id, event_template_id)
             );",
         )?;
+
+        // Phase 2 event economy migration: add new columns to events table.
+        // SQLite doesn't support IF NOT EXISTS for ALTER TABLE, so we check
+        // PRAGMA table_info first.
+        {
+            let mut stmt = self
+                .conn
+                .prepare("PRAGMA table_info(events)")?;
+            let existing: Vec<String> = stmt
+                .query_map([], |row| row.get::<_, String>(1))
+                .unwrap()
+                .filter_map(|r| r.ok())
+                .collect();
+
+            if !existing.contains(&"triggered_by_json".to_string()) {
+                self.conn.execute_batch(
+                    "ALTER TABLE events ADD COLUMN triggered_by_json TEXT NOT NULL DEFAULT '[]';
+                     ALTER TABLE events ADD COLUMN suppressed_by_json TEXT NOT NULL DEFAULT '[]';
+                     ALTER TABLE events ADD COLUMN triggers_event_id TEXT;
+                     ALTER TABLE events ADD COLUMN triggers_on_resolve TEXT;
+                     ALTER TABLE events ADD COLUMN priority INTEGER NOT NULL DEFAULT 0;
+                     ALTER TABLE events ADD COLUMN precondition_mode TEXT NOT NULL DEFAULT 'All';",
+                )?;
+            }
+        }
         Ok(())
     }
 }

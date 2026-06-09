@@ -1088,6 +1088,7 @@ fn handle_edit_events(app: &mut App, code: KeyCode) {
                 cooldown: 0,
                 effects: vec![],
                 spawns_decision_id: None,
+                ..Default::default()
             };
             let _ = app.store.upsert_event(&app.schema_name, &new_event);
             app.edit_events = app.store.list_events(&app.schema_name).unwrap_or_default();

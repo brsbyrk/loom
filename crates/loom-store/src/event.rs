@@ -8,11 +8,21 @@
 use loom_core::{AttributeSchema, NamedCondition, NamedEffect};
 use rusqlite::{params, Result as SqlResult};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 
 // ── Event template ────────────────────────────────────────────────────────────
 
+/// Controls whether all preconditions must be met (AND) or any one suffices (OR).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PreconditionMode {
+    #[default]
+    All,
+    Any,
+}
+
 /// A named event template — stored per schema, resolved to engine types via schema.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct NamedEvent {
     /// Unique identifier within the schema.
     pub id: String,
@@ -39,6 +49,24 @@ pub struct NamedEvent {
     /// Optional decision ID to spawn when the event fires.
     #[serde(default)]
     pub spawns_decision_id: Option<String>,
+    /// Event IDs that trigger this event (chain trigger path).
+    #[serde(default)]
+    pub triggered_by: Vec<String>,
+    /// While this event is active, these event IDs cannot trigger.
+    #[serde(default)]
+    pub suppressed_by: Vec<String>,
+    /// Fires another event when THIS event fires.
+    #[serde(default)]
+    pub triggers_event_id: Option<String>,
+    /// Fires another event when THIS event resolves.
+    #[serde(default)]
+    pub triggers_on_resolve: Option<String>,
+    /// Priority — higher fires first.
+    #[serde(default)]
+    pub priority: i32,
+    /// Precondition mode: All (AND) or Any (OR).
+    #[serde(default)]
+    pub precondition_mode: PreconditionMode,
 }
 
 /// An event effect that was applied during this step — returned by
@@ -69,14 +97,23 @@ impl crate::Store {
         let schema_id = self.schema_id(schema_name)?;
         let preconditions_json = serde_json::to_string(&event.preconditions).unwrap();
         let effects_json = serde_json::to_string(&event.effects).unwrap();
+        let triggered_by_json = serde_json::to_string(&event.triggered_by).unwrap();
+        let suppressed_by_json = serde_json::to_string(&event.suppressed_by).unwrap();
+        let precondition_mode_str = match event.precondition_mode {
+            PreconditionMode::All => "All",
+            PreconditionMode::Any => "Any",
+        };
 
         self.conn.execute(
-            "INSERT INTO events (schema_id, event_id, label, description, preconditions_json, delay, duration, cooldown, effects_json, spawns_decision_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+            "INSERT INTO events (schema_id, event_id, label, description, preconditions_json, delay, duration, cooldown, effects_json, spawns_decision_id, triggered_by_json, suppressed_by_json, triggers_event_id, triggers_on_resolve, priority, precondition_mode)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
              ON CONFLICT(schema_id, event_id) DO UPDATE SET
                 label = ?3, description = ?4, preconditions_json = ?5,
                 delay = ?6, duration = ?7, cooldown = ?8,
                 effects_json = ?9, spawns_decision_id = ?10,
+                triggered_by_json = ?11, suppressed_by_json = ?12,
+                triggers_event_id = ?13, triggers_on_resolve = ?14,
+                priority = ?15, precondition_mode = ?16,
                 created_at = datetime('now')",
             params![
                 schema_id,
@@ -89,6 +126,12 @@ impl crate::Store {
                 event.cooldown,
                 effects_json,
                 event.spawns_decision_id,
+                triggered_by_json,
+                suppressed_by_json,
+                event.triggers_event_id,
+                event.triggers_on_resolve,
+                event.priority,
+                precondition_mode_str,
             ],
         )?;
         Ok(self.conn.last_insert_rowid())
@@ -102,7 +145,7 @@ impl crate::Store {
     ) -> SqlResult<Option<NamedEvent>> {
         let schema_id = self.schema_id(schema_name)?;
         let mut stmt = self.conn.prepare(
-            "SELECT event_id, label, description, preconditions_json, delay, duration, cooldown, effects_json, spawns_decision_id
+            "SELECT event_id, label, description, preconditions_json, delay, duration, cooldown, effects_json, spawns_decision_id, triggered_by_json, suppressed_by_json, triggers_event_id, triggers_on_resolve, priority, precondition_mode
              FROM events WHERE schema_id = ?1 AND event_id = ?2",
         )?;
         let mut rows = stmt.query_map(params![schema_id, event_id], |row| {
@@ -116,14 +159,28 @@ impl crate::Store {
                 row.get::<_, u32>(6)?,
                 row.get::<_, String>(7)?,
                 row.get::<_, Option<String>>(8)?,
+                row.get::<_, String>(9)?,
+                row.get::<_, String>(10)?,
+                row.get::<_, Option<String>>(11)?,
+                row.get::<_, Option<String>>(12)?,
+                row.get::<_, i32>(13)?,
+                row.get::<_, String>(14)?,
             ))
         })?;
         match rows.next() {
-            Some(Ok((id, label, description, precond_json, delay, duration, cooldown, effects_json, spawns))) => {
+            Some(Ok((id, label, description, precond_json, delay, duration, cooldown, effects_json, spawns, triggered_by_json, suppressed_by_json, triggers_event_id, triggers_on_resolve, priority, precondition_mode_str))) => {
                 let preconditions: Vec<NamedCondition> =
                     serde_json::from_str(&precond_json).unwrap_or_default();
                 let effects: Vec<NamedEffect> =
                     serde_json::from_str(&effects_json).unwrap_or_default();
+                let triggered_by: Vec<String> =
+                    serde_json::from_str(&triggered_by_json).unwrap_or_default();
+                let suppressed_by: Vec<String> =
+                    serde_json::from_str(&suppressed_by_json).unwrap_or_default();
+                let precondition_mode = match precondition_mode_str.as_str() {
+                    "Any" => PreconditionMode::Any,
+                    _ => PreconditionMode::All,
+                };
                 Ok(Some(NamedEvent {
                     id,
                     label,
@@ -134,6 +191,12 @@ impl crate::Store {
                     cooldown,
                     effects,
                     spawns_decision_id: spawns,
+                    triggered_by,
+                    suppressed_by,
+                    triggers_event_id,
+                    triggers_on_resolve,
+                    priority,
+                    precondition_mode,
                 }))
             }
             _ => Ok(None),
@@ -144,7 +207,7 @@ impl crate::Store {
     pub fn list_events(&self, schema_name: &str) -> SqlResult<Vec<NamedEvent>> {
         let schema_id = self.schema_id(schema_name)?;
         let mut stmt = self.conn.prepare(
-            "SELECT event_id, label, description, preconditions_json, delay, duration, cooldown, effects_json, spawns_decision_id
+            "SELECT event_id, label, description, preconditions_json, delay, duration, cooldown, effects_json, spawns_decision_id, triggered_by_json, suppressed_by_json, triggers_event_id, triggers_on_resolve, priority, precondition_mode
              FROM events WHERE schema_id = ?1 ORDER BY event_id",
         )?;
         let rows = stmt.query_map(params![schema_id], |row| {
@@ -158,15 +221,29 @@ impl crate::Store {
                 row.get::<_, u32>(6)?,
                 row.get::<_, String>(7)?,
                 row.get::<_, Option<String>>(8)?,
+                row.get::<_, String>(9)?,
+                row.get::<_, String>(10)?,
+                row.get::<_, Option<String>>(11)?,
+                row.get::<_, Option<String>>(12)?,
+                row.get::<_, i32>(13)?,
+                row.get::<_, String>(14)?,
             ))
         })?;
         let mut events = Vec::new();
         for row in rows {
-            let (id, label, description, precond_json, delay, duration, cooldown, effects_json, spawns) = row?;
+            let (id, label, description, precond_json, delay, duration, cooldown, effects_json, spawns, triggered_by_json, suppressed_by_json, triggers_event_id, triggers_on_resolve, priority, precondition_mode_str) = row?;
             let preconditions: Vec<NamedCondition> =
                 serde_json::from_str(&precond_json).unwrap_or_default();
             let effects: Vec<NamedEffect> =
                 serde_json::from_str(&effects_json).unwrap_or_default();
+            let triggered_by: Vec<String> =
+                serde_json::from_str(&triggered_by_json).unwrap_or_default();
+            let suppressed_by: Vec<String> =
+                serde_json::from_str(&suppressed_by_json).unwrap_or_default();
+            let precondition_mode = match precondition_mode_str.as_str() {
+                "Any" => PreconditionMode::Any,
+                _ => PreconditionMode::All,
+            };
             events.push(NamedEvent {
                 id,
                 label,
@@ -177,6 +254,12 @@ impl crate::Store {
                 cooldown,
                 effects,
                 spawns_decision_id: spawns,
+                triggered_by,
+                suppressed_by,
+                triggers_event_id,
+                triggers_on_resolve,
+                priority,
+                precondition_mode,
             });
         }
         Ok(events)
@@ -241,21 +324,78 @@ impl crate::timeline::TimelineStore<'_> {
         let mut actives = self.load_active_events(timeline_id)?;
         let active_template_ids: Vec<i64> = actives.iter().map(|a| a.event_template_id).collect();
 
-        // 3. Check each template against preconditions
+        // 3. Collect which events are firing or resolving this step (for chains)
+        let mut firing_this_step: HashSet<String> = HashSet::new();
+        let mut resolving_this_step: HashSet<String> = HashSet::new();
+
+        // First pass: determine what fires
+        let mut to_activate: Vec<(i32, &EventTemplateRow)> = Vec::new();
+
         for evt_tmpl in &events {
             if active_template_ids.contains(&evt_tmpl.row_id) {
-                continue; // Already active (pending/active/cooldown)
+                continue; // Already active
             }
 
-            // Resolve preconditions to engine Condition and check them
-            let preconditions_met = self.check_preconditions(&evt_tmpl.preconditions, current_values, schema);
-            if !preconditions_met {
+            // Suppression check
+            let suppressed = evt_tmpl.suppressed_by.iter().any(|supp_id| {
+                actives.iter().any(|a| {
+                    events
+                        .iter()
+                        .any(|e| e.row_id == a.event_template_id && e.event_id == *supp_id)
+                })
+            });
+            if suppressed {
                 continue;
             }
 
+            // Trigger path
+            let triggered = evt_tmpl.triggered_by.iter().any(|trigger_id| {
+                firing_this_step.contains(trigger_id)
+                    || resolving_this_step.contains(trigger_id)
+            });
+
+            // State path
+            let preconditions_met = if evt_tmpl.precondition_mode == PreconditionMode::All {
+                evt_tmpl
+                    .preconditions
+                    .iter()
+                    .all(|nc| {
+                        nc.resolve(schema)
+                            .map(|c| c.check(current_values))
+                            .unwrap_or(false)
+                    })
+            } else {
+                evt_tmpl.preconditions.is_empty()
+                    || evt_tmpl
+                        .preconditions
+                        .iter()
+                        .any(|nc| {
+                            nc.resolve(schema)
+                                .map(|c| c.check(current_values))
+                                .unwrap_or(false)
+                        })
+            };
+
+            if triggered || preconditions_met {
+                to_activate.push((evt_tmpl.priority, evt_tmpl));
+            }
+        }
+
+        // Sort by priority descending, then original row_id order
+        to_activate.sort_by_key(|(prio, evt)| (-prio, evt.row_id));
+
+        // Process in priority order
+        for (_prio, evt_tmpl) in &to_activate {
             if evt_tmpl.delay > 0 {
                 // Create pending entry
-                self.create_active_event(timeline_id, evt_tmpl.row_id, "pending", evt_tmpl.delay, evt_tmpl.duration, evt_tmpl.cooldown)?;
+                self.create_active_event(
+                    timeline_id,
+                    evt_tmpl.row_id,
+                    "pending",
+                    evt_tmpl.delay,
+                    evt_tmpl.duration,
+                    evt_tmpl.cooldown,
+                )?;
                 results.push(AppliedEventEffect {
                     event_label: evt_tmpl.label.clone(),
                     phase: "pending".into(),
@@ -263,21 +403,49 @@ impl crate::timeline::TimelineStore<'_> {
                     delta: 0.0,
                     attribute_name: String::new(),
                     spawned_decision_id: None,
-                    description: format!("{} triggered, will fire in {} steps", evt_tmpl.label, evt_tmpl.delay),
+                    description: format!(
+                        "{} triggered, will fire in {} steps",
+                        evt_tmpl.label, evt_tmpl.delay
+                    ),
                 });
             } else {
                 // Fire immediately
-                self.create_active_event(timeline_id, evt_tmpl.row_id, "active", 0, evt_tmpl.duration, evt_tmpl.cooldown)?;
+                self.create_active_event(
+                    timeline_id,
+                    evt_tmpl.row_id,
+                    "active",
+                    0,
+                    evt_tmpl.duration,
+                    evt_tmpl.cooldown,
+                )?;
 
-                for (attr_name, delta) in self.resolve_effects(&evt_tmpl.effects, current_values, schema) {
+                firing_this_step.insert(evt_tmpl.event_id.clone());
+
+                // Chain: if this event fires, queue its triggers_event_id
+                if let Some(ref chain_id) = evt_tmpl.triggers_event_id {
+                    firing_this_step.insert(chain_id.clone());
+                }
+
+                for (attr_name, delta) in
+                    self.resolve_effects(&evt_tmpl.effects, current_values, schema)
+                {
                     results.push(AppliedEventEffect {
                         event_label: evt_tmpl.label.clone(),
                         phase: "active".into(),
                         event_id: evt_tmpl.event_id.clone(),
-                        delta: delta,
+                        delta,
                         attribute_name: attr_name.clone(),
                         spawned_decision_id: evt_tmpl.spawns_decision_id.clone(),
-                        description: format!("{} fired — {}: {}", evt_tmpl.label, attr_name, if delta >= 0.0 { format!("+{:.1}", delta) } else { format!("{:.1}", delta) }),
+                        description: format!(
+                            "{} fired — {}: {}",
+                            evt_tmpl.label,
+                            attr_name,
+                            if delta >= 0.0 {
+                                format!("+{:.1}", delta)
+                            } else {
+                                format!("{:.1}", delta)
+                            }
+                        ),
                     });
                 }
             }
@@ -294,20 +462,43 @@ impl crate::timeline::TimelineStore<'_> {
                     }
                     if active.delay_remaining == 0 {
                         // Find the template to fire effects
-                        if let Some(tmpl) = events.iter().find(|e| e.row_id == active.event_template_id) {
+                        if let Some(tmpl) =
+                            events.iter().find(|e| e.row_id == active.event_template_id)
+                        {
                             active.phase = "active".to_string();
                             active.duration_remaining = tmpl.duration;
-                            self.update_active_event_activate(active.id, active.duration_remaining)?;
+                            self.update_active_event_activate(
+                                active.id,
+                                active.duration_remaining,
+                            )?;
 
-                            for (attr_name, delta) in self.resolve_effects(&tmpl.effects, current_values, schema) {
+                            firing_this_step.insert(tmpl.event_id.clone());
+
+                            // Chain on fire
+                            if let Some(ref chain_id) = tmpl.triggers_event_id {
+                                firing_this_step.insert(chain_id.clone());
+                            }
+
+                            for (attr_name, delta) in
+                                self.resolve_effects(&tmpl.effects, current_values, schema)
+                            {
                                 results.push(AppliedEventEffect {
                                     event_label: tmpl.label.clone(),
                                     phase: "active".into(),
                                     event_id: tmpl.event_id.clone(),
-                                    delta: delta,
+                                    delta,
                                     attribute_name: attr_name.clone(),
                                     spawned_decision_id: tmpl.spawns_decision_id.clone(),
-                                    description: format!("{} fired — {}: {}", tmpl.label, attr_name, if delta >= 0.0 { format!("+{:.1}", delta) } else { format!("{:.1}", delta) }),
+                                    description: format!(
+                                        "{} fired — {}: {}",
+                                        tmpl.label,
+                                        attr_name,
+                                        if delta >= 0.0 {
+                                            format!("+{:.1}", delta)
+                                        } else {
+                                            format!("{:.1}", delta)
+                                        }
+                                    ),
                                 });
                             }
                         }
@@ -316,14 +507,22 @@ impl crate::timeline::TimelineStore<'_> {
                 "active" => {
                     if active.duration_remaining > 0 {
                         // Apply effects again this step (for multi-step duration spread)
-                        if let Some(tmpl) = events.iter().find(|e| e.row_id == active.event_template_id) {
-
-                            active.duration_remaining = active.duration_remaining.saturating_sub(1);
+                        if let Some(tmpl) =
+                            events.iter().find(|e| e.row_id == active.event_template_id)
+                        {
+                            active.duration_remaining =
+                                active.duration_remaining.saturating_sub(1);
                             if active.duration_remaining > 0 {
                                 // Ongoing — spread effect
-                                for (attr_name, delta) in self.resolve_effects(&tmpl.effects, current_values, schema) {
+                                for (attr_name, delta) in
+                                    self.resolve_effects(&tmpl.effects, current_values, schema)
+                                {
                                     // For spread: divide delta by duration for each active step
-                                    let per_step = if tmpl.duration > 0 { delta / tmpl.duration as f64 } else { delta };
+                                    let per_step = if tmpl.duration > 0 {
+                                        delta / tmpl.duration as f64
+                                    } else {
+                                        delta
+                                    };
                                     results.push(AppliedEventEffect {
                                         event_label: tmpl.label.clone(),
                                         phase: "active".into(),
@@ -331,7 +530,16 @@ impl crate::timeline::TimelineStore<'_> {
                                         delta: per_step,
                                         attribute_name: attr_name.clone(),
                                         spawned_decision_id: None,
-                                        description: format!("{} ongoing — {}: {}", tmpl.label, attr_name, if per_step >= 0.0 { format!("+{:.1}", per_step) } else { format!("{:.1}", per_step) }),
+                                        description: format!(
+                                            "{} ongoing — {}: {}",
+                                            tmpl.label,
+                                            attr_name,
+                                            if per_step >= 0.0 {
+                                                format!("+{:.1}", per_step)
+                                            } else {
+                                                format!("{:.1}", per_step)
+                                            }
+                                        ),
                                     });
                                 }
                             }
@@ -340,7 +548,18 @@ impl crate::timeline::TimelineStore<'_> {
                                 // Move to cooldown
                                 active.phase = "cooldown".to_string();
                                 active.cooldown_remaining = tmpl.cooldown;
-                                self.update_active_event_cooldown(active.id, active.cooldown_remaining)?;
+                                self.update_active_event_cooldown(
+                                    active.id,
+                                    active.cooldown_remaining,
+                                )?;
+
+                                resolving_this_step.insert(tmpl.event_id.clone());
+
+                                // Chain on resolve
+                                if let Some(ref chain_id) = tmpl.triggers_on_resolve {
+                                    resolving_this_step.insert(chain_id.clone());
+                                }
+
                                 results.push(AppliedEventEffect {
                                     event_label: tmpl.label.clone(),
                                     phase: "resolved".into(),
@@ -351,18 +570,30 @@ impl crate::timeline::TimelineStore<'_> {
                                     description: format!("{} resolved", tmpl.label),
                                 });
                             } else {
-                                self.update_active_event_duration(active.id, active.duration_remaining)?;
+                                self.update_active_event_duration(
+                                    active.id,
+                                    active.duration_remaining,
+                                )?;
                             }
                         } else {
-                            active.duration_remaining = active.duration_remaining.saturating_sub(1);
-                            self.update_active_event_duration(active.id, active.duration_remaining)?;
+                            active.duration_remaining =
+                                active.duration_remaining.saturating_sub(1);
+                            self.update_active_event_duration(
+                                active.id,
+                                active.duration_remaining,
+                            )?;
                             if active.duration_remaining == 0 {
                                 active.phase = "cooldown".to_string();
                                 // Find cooldown from template
-                                if let Some(tmpl) = events.iter().find(|e| e.row_id == active.event_template_id) {
+                                if let Some(tmpl) =
+                                    events.iter().find(|e| e.row_id == active.event_template_id)
+                                {
                                     active.cooldown_remaining = tmpl.cooldown;
                                 }
-                                self.update_active_event_cooldown(active.id, active.cooldown_remaining)?;
+                                self.update_active_event_cooldown(
+                                    active.id,
+                                    active.cooldown_remaining,
+                                )?;
                             }
                         }
                     }
@@ -370,7 +601,10 @@ impl crate::timeline::TimelineStore<'_> {
                 "cooldown" => {
                     if active.cooldown_remaining > 0 {
                         active.cooldown_remaining -= 1;
-                        self.update_active_event_cooldown(active.id, active.cooldown_remaining)?;
+                        self.update_active_event_cooldown(
+                            active.id,
+                            active.cooldown_remaining,
+                        )?;
                     }
                     if active.cooldown_remaining == 0 {
                         to_delete.push(active.id);
@@ -403,6 +637,12 @@ struct EventTemplateRow {
     cooldown: u32,
     effects: Vec<NamedEffect>,
     spawns_decision_id: Option<String>,
+    triggered_by: Vec<String>,
+    suppressed_by: Vec<String>,
+    triggers_event_id: Option<String>,
+    triggers_on_resolve: Option<String>,
+    priority: i32,
+    precondition_mode: PreconditionMode,
 }
 
 impl crate::timeline::TimelineStore<'_> {
@@ -416,10 +656,11 @@ impl crate::timeline::TimelineStore<'_> {
 
     fn load_event_templates(&self, schema_id: i64) -> SqlResult<Vec<EventTemplateRow>> {
         let mut stmt = self.0.prepare(
-            "SELECT id, event_id, label, preconditions_json, delay, duration, cooldown, effects_json, spawns_decision_id
+            "SELECT id, event_id, label, preconditions_json, delay, duration, cooldown, effects_json, spawns_decision_id, triggered_by_json, suppressed_by_json, triggers_event_id, triggers_on_resolve, priority, precondition_mode
              FROM events WHERE schema_id = ?1",
         )?;
         let rows = stmt.query_map(params![schema_id], |row| {
+            let precondition_mode_str: String = row.get(14)?;
             Ok(EventTemplateRow {
                 row_id: row.get(0)?,
                 event_id: row.get(1)?,
@@ -430,6 +671,15 @@ impl crate::timeline::TimelineStore<'_> {
                 cooldown: row.get(6)?,
                 effects: serde_json::from_str(&row.get::<_, String>(7)?).unwrap_or_default(),
                 spawns_decision_id: row.get(8)?,
+                triggered_by: serde_json::from_str(&row.get::<_, String>(9)?).unwrap_or_default(),
+                suppressed_by: serde_json::from_str(&row.get::<_, String>(10)?).unwrap_or_default(),
+                triggers_event_id: row.get(11)?,
+                triggers_on_resolve: row.get(12)?,
+                priority: row.get(13)?,
+                precondition_mode: match precondition_mode_str.as_str() {
+                    "Any" => PreconditionMode::Any,
+                    _ => PreconditionMode::All,
+                },
             })
         })?;
         let mut out = Vec::new();
@@ -514,19 +764,6 @@ impl crate::timeline::TimelineStore<'_> {
     fn delete_active_event(&self, id: i64) -> SqlResult<()> {
         self.0.execute("DELETE FROM active_events WHERE id = ?1", params![id])?;
         Ok(())
-    }
-
-    /// Check preconditions (list of NamedCondition) against current attribute values.
-    /// Uses the schema to resolve attribute names to indices.
-    fn check_preconditions(&self, preconditions: &[NamedCondition], values: &[f64], schema: &AttributeSchema) -> bool {
-        if preconditions.is_empty() {
-            return true;
-        }
-        preconditions.iter().all(|nc| {
-            nc.resolve(schema)
-                .map(|c| c.check(values))
-                .unwrap_or(false)
-        })
     }
 
     /// Resolve named effects to (attribute_name, computed_delta) pairs.

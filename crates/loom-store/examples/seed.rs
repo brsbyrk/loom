@@ -144,6 +144,7 @@ fn seed_personal_events(store: &Store, schema: &str) -> Result<(), Box<dyn std::
             cooldown: 30,
             effects: vec![NamedEffect::fixed("wealth.cash", -2000.0)],
             spawns_decision_id: None,
+            ..Default::default()
         },
         // 2. health_scare
         NamedEvent {
@@ -163,6 +164,7 @@ fn seed_personal_events(store: &Store, schema: &str) -> Result<(), Box<dyn std::
                 NamedEffect::fixed("health.stress", 15.0),
             ],
             spawns_decision_id: Some("improve_health".into()),
+            ..Default::default()
         },
         // 3. unexpected_bonus
         NamedEvent {
@@ -182,6 +184,7 @@ fn seed_personal_events(store: &Store, schema: &str) -> Result<(), Box<dyn std::
                 NamedEffect::fixed("health.stress", -5.0),
             ],
             spawns_decision_id: None,
+            ..Default::default()
         },
         // 4. social_conflict
         NamedEvent {
@@ -202,6 +205,7 @@ fn seed_personal_events(store: &Store, schema: &str) -> Result<(), Box<dyn std::
                 NamedEffect::fixed("health.stress", 5.0),
             ],
             spawns_decision_id: None,
+            ..Default::default()
         },
         // 5. layoff_wave
         NamedEvent {
@@ -221,6 +225,7 @@ fn seed_personal_events(store: &Store, schema: &str) -> Result<(), Box<dyn std::
                 NamedEffect::fixed("health.stress", 25.0),
             ],
             spawns_decision_id: Some("job_search_options".into()),
+            ..Default::default()
         },
         // 6. burnout
         NamedEvent {
@@ -241,6 +246,7 @@ fn seed_personal_events(store: &Store, schema: &str) -> Result<(), Box<dyn std::
                 NamedEffect::fixed("health.stress", 3.0),
             ],
             spawns_decision_id: None,
+            ..Default::default()
         },
     ];
 
@@ -381,6 +387,7 @@ fn seed_financial_events(store: &Store, schema: &str) -> Result<(), Box<dyn std:
             // Per-step effect; runtime divides by duration.
             effects: vec![NamedEffect::fixed("stocks", -1500.0)],
             spawns_decision_id: Some("sell_or_hold".into()),
+            ..Default::default()
         },
         // 10. rental_vacancy
         NamedEvent {
@@ -397,6 +404,7 @@ fn seed_financial_events(store: &Store, schema: &str) -> Result<(), Box<dyn std:
             cooldown: 18,
             effects: vec![NamedEffect::fixed("monthly_income", -300.0)],
             spawns_decision_id: None,
+            ..Default::default()
         },
         // 11. interest_rate_hike
         NamedEvent {
@@ -413,6 +421,7 @@ fn seed_financial_events(store: &Store, schema: &str) -> Result<(), Box<dyn std:
             cooldown: 36,
             effects: vec![NamedEffect::fixed("monthly_expenses", 200.0)],
             spawns_decision_id: None,
+            ..Default::default()
         },
         // 12. medical_emergency
         NamedEvent {
@@ -428,6 +437,7 @@ fn seed_financial_events(store: &Store, schema: &str) -> Result<(), Box<dyn std:
                 NamedEffect::fixed("debt", 4000.0),
             ],
             spawns_decision_id: None,
+            ..Default::default()
         },
     ];
 

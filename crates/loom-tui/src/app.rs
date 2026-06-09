@@ -992,6 +992,7 @@ impl App {
                 } else {
                     Some(state.spawns_decision_id)
                 },
+                ..Default::default()
             };
             let _ = self.store.upsert_event(&self.schema_name, &ne);
             self.reload_data();
