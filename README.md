@@ -1,15 +1,12 @@
 # Loom
 
-A **vector-state decision engine** for human-scale simulation. Model your life, career, finances, or any multi-attribute system — then run Monte Carlo what-if scenarios, track actual outcomes over time, and compare forecasts against reality.
+A **decision assistant engine** — answers "What should I do right now?" Model any domain as a vector of attributes, define decisions/events/goals, and let the engine rank your options.
 
-## What It Does
-
-- **Define** an attribute space (wealth, health, skills, social, time, …) as a JSON schema
-- **Model** decisions with preconditions, costs, and probabilistic outcomes
-- **Simulate** — Monte Carlo forward runs with passives, cliffs, and utility scoring
-- **Journal** real outcomes in a git-for-life timeline (snapshots, forks, forecast vs actual)
-- **Compare** decisions side-by-side: utility distributions, attribute projections, sensitivity
-- **Automate** recurring effects and external events with delay/duration/cooldown lifecycle
+- **Dashboard** — one screen: your state, ranked decisions, recent activity
+- **Fork Explorer** — pause, fork N paths, fast-forward, compare utilities
+- **Timeline** — git-for-life journal with snapshots, forks, forecast-vs-actual
+- **Templates** — pre-built domains (Life Coach, Financial Planner) in single JSON files
+- **Engine** — Monte Carlo simulation, event chains, Pareto optimization, 70 tests
 
 ## Quick Start
 
@@ -17,50 +14,89 @@ A **vector-state decision engine** for human-scale simulation. Model your life, 
 # Build
 cargo build
 
-# Seed the database with example schemas, decisions, passives, and events
+# Seed from a template (recommended)
+cargo run --example seed_template -p loom-store
+
+# Or seed both classic schemas
 cargo run --example seed -p loom-store
 
-# Launch the TUI
+# Launch
 cargo run -p loom-tui
 ```
 
-Database lives at `~/.loom/loom.db`. Schema, decisions, passives, goals, states, timelines — all in one SQLite file.
+Database lives at `~/.loom/loom.db`. Everything — schemas, decisions, passives, goals, events, timelines — in one SQLite file.
 
-## TUI — Three Tabs
+## Dashboard
 
-| Key | Tab | What You Do |
-|---|---|---|
-| `1` | **Timeline** | Journal real life. Append snapshots, fork parallel paths, resolve outcomes. Events auto-fire when their preconditions are met. |
-| `2` | **Explore** | Run ad-hoc simulations. Pick a decision, tweak initial state, run Monte Carlo, inspect utility traces and outcome distributions. |
-| `3` | **Config** | Edit schemas, decisions, passives, goals, events. Inline CRUD — add/remove outcomes, change weights, adjust preconditions. |
-
-Press `4` from the Timeline tab to jump to event configuration.
-
-## Architecture
+The default home screen. Three sections:
 
 ```
-Config Layer (JSON/DB)
-  NamedDecision, NamedEffect, NamedCondition, …
-  ↓ resolve(&AttributeSchema)
-Engine (loom-core)
-  Predicate → Action → Valuation
-  Monte Carlo simulation on Vec<f64>
-  ↓
-Store (loom-store)
-  SQLite: schemas, decisions, passives, goals, states, timelines, events
-  ↓
-TUI (loom-tui)
-  ratatui interface, 3-tab layout
+┌─ STATE — life_coach ──────────────────────────┐
+│  wealth.cash: 50000          wealth.stocks: 25000 │
+│  health.physical: 75         health.stress: 30     │
+│  skills.rust: 70             skills.python: 45     │
+│  time_free: 40                                    │
+├─ DECISIONS (ranked) — 3 total ──────────────────┤
+│  > 1. Take remote job at Nvidia   util: +142.3   │
+│    2. Address your declining health  util: +45.7  │
+│    3. ✗ Job search options  (unavailable)        │
+├─ RECENT ────────────────────────────────────────┤
+│  2026-06-10  ✓ Took remote job                   │
+│  2026-06-09  ⚡ Health scare — stress +15         │
+└──────────────────────────────────────────────────┘
+↑↓/jk scroll  S simulate  R refresh  L schema  F fork  Tab tabs  Q quit
 ```
 
-Three crates:
-- **loom-core** — Engine. Traits (`Predicate`, `Action`, `Valuation`), compositors (`All`, `Sequence`, `When`, `OneOf`), MC simulation, scoring, schema-driven state.
-- **loom-store** — SQLite persistence. CRUD for all config types, timeline snapshots+forks, event runtime.
-- **loom-tui** — Terminal UI. Schema browser, decision explorer, simulation results, inline config editor, timeline journal.
+A **master timeline** is auto-created on first run. The dashboard always shows your latest state.
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the full design.
+### Keybindings
 
-## Config Format (Named Layer)
+| Key | Action |
+|---|---|
+| `↑↓/j k` | Scroll decisions |
+| `S` | Simulate highlighted decision (MC + utility score) |
+| `F` | Fork explorer — compare this decision against alternatives |
+| `G` | Apply an event-generated decision |
+| `R` | Refresh dashboard data |
+| `L` | Switch template/schema |
+| `Tab` | Legacy 3-tab view (Timeline / Explore / Config) |
+| `Q` | Quit |
+
+## Fork Explorer
+
+Press `F` on any decision to fork from your current state:
+
+```
+┌─ FORK — Take remote job at Nvidia ─────────────┐
+│  Source: master snapshot #3                      │
+│                                                  │
+│  1. Take remote job at Nvidia   util: +142.3     │
+│     wealth.cash: +40000  skills.rust: +20        │
+│  2. Address declining health    util: +45.7      │
+│     health.physical: +20  wealth.cash: -500      │
+│                                                  │
+│  Enter=apply  Esc=cancel  ↑↓=navigate            │
+└──────────────────────────────────────────────────┘
+```
+
+`Enter` commits the decision to your master timeline as a snapshot with an attached forecast. `Esc` discards the fork.
+
+## Templates
+
+Complete domain presets in single JSON files:
+
+```bash
+# Seed from a template
+cargo run --example seed_template -p loom-store
+```
+
+Included templates:
+- **life_coach.json** — personal life: career, health, skills, relationships, 9 events with burnout cascade
+- **financial_planner.json** — finances: stocks, debt, real estate, 8 events with market crash cascade
+
+Custom templates are just JSON files with a schema, decisions, passives, goals, and events.
+
+## Config Format
 
 All config uses human-readable attribute names. The engine resolves them to indices via the schema.
 
@@ -70,15 +106,17 @@ All config uses human-readable attribute names. The engine resolves them to indi
 {
   "version": 1,
   "attributes": [
-    {"name": "wealth.cash", "unit": "$"},
+    {"name": "wealth.cash", "unit": "$", "kind": "continuous"},
     {"name": "health.physical", "unit": "pts", "bounds": [0, 100]},
-    {"name": "skills.rust", "unit": "pts", "bounds": [0, 100]},
+    {"name": "trait_ambitious", "kind": "boolean"},
     {"name": "time_free", "group": "resources", "unit": "hrs"}
   ]
 }
 ```
 
-### Decision
+`kind` defaults to `"continuous"`. Boolean attributes are 0.0/1.0 flags.
+
+### Decisions
 
 ```json
 {
@@ -87,9 +125,7 @@ All config uses human-readable attribute names. The engine resolves them to indi
   "preconditions": [
     {"attribute": "skills.rust", "operator": "Gt", "value": 60}
   ],
-  "cost": [
-    {"attribute": "time_free", "delta": -20}
-  ],
+  "cost": [{"attribute": "time_free", "delta": -20}],
   "outcomes": [
     {
       "weight": 70,
@@ -117,47 +153,70 @@ All config uses human-readable attribute names. The engine resolves them to indi
 }
 ```
 
+### Events (with chains, suppression, and generated decisions)
+
+```json
+{
+  "id": "market_correction",
+  "label": "Market correction",
+  "preconditions": [{"attribute": "stocks", "operator": "Gt", "value": 5000}],
+  "precondition_mode": "all",
+  "priority": 20,
+  "delay": 2, "duration": 3, "cooldown": 24,
+  "effects": [{"attribute": "stocks", "delta": -1500}],
+  "triggers_event_id": "panic_selling",
+  "triggers_on_resolve": "regulatory_volatility",
+  "decision_templates": [
+    {
+      "label": "Sell everything",
+      "cost": [],
+      "outcomes": [
+        {"weight": 70, "label": "Cut losses", "transform": {"type": "declarative", "effects": [{"attribute": "cash", "delta": 5000}]}},
+        {"weight": 30, "label": "Miss rebound", "transform": {"type": "declarative", "effects": []}}
+      ]
+    },
+    {
+      "label": "Hold steady",
+      "cost": [],
+      "outcomes": [
+        {"weight": 100, "label": "Weather the storm", "transform": {"type": "declarative", "effects": [{"attribute": "health.stress", "delta": 10}]}}
+      ]
+    }
+  ],
+  "triggered_by": [],
+  "suppressed_by": []
+}
+```
+
+Key event fields:
+- `precondition_mode`: `"all"` (AND, default) or `"any"` (OR)
+- `priority`: higher fires first when multiple events trigger same step
+- `triggers_event_id` / `triggers_on_resolve`: chain events on fire/resolve
+- `triggered_by`: event IDs that trigger this one (chain source)
+- `suppressed_by`: event IDs that block this while active
+- `decision_templates`: generated decision options (ephemeral, tied to event lifecycle)
+
 ### Passives
 
-Recurring effects that tick during simulation and timeline journaling:
+Recurring effects: `every_step`, `every` (N steps), or `when` (conditional):
 
 ```json
 {
-  "id": "monthly_salary",
-  "label": "Monthly Salary",
+  "id": "salary",
+  "label": "Monthly salary",
   "frequency": {"type": "every_step"},
-  "effects": [
-    {"attribute": "wealth.cash", "delta": 5000}
-  ]
+  "effects": [{"attribute": "wealth.cash", "delta": 5000}]
 }
 ```
 
-Supports `every_step`, `every` (every N steps), and `when` (conditional):
-
-```json
-{
-  "frequency": {
-    "type": "when",
-    "attribute": "health.stress",
-    "operator": "Gt",
-    "value": 70
-  },
-  "effects": [
-    {"attribute": "health.physical", "delta": -2}
-  ]
-}
-```
-
-### Goal Vector
+### Goal Vectors
 
 ```json
 {
   "weights": {
     "wealth.cash": 1.0,
     "health.physical": 0.5,
-    "health.stress": -0.3,
-    "skills.rust": 0.8,
-    "time_free": 0.2
+    "health.stress": -0.3
   },
   "cliffs": {
     "health.physical": {"min": 30, "penalty": 1.0}
@@ -165,51 +224,17 @@ Supports `every_step`, `every` (every N steps), and `when` (conditional):
 }
 ```
 
-Weights: positive = maximize, negative = minimize, zero = ignore. Cliffs: penalty factor applied when the attribute drops below `min`. `penalty=1.0` means the attribute contributes nothing below the threshold.
-
-### Events
-
-Events have a lifecycle: **delay → active (duration spread) → cooldown → repeatable**.
-
-```json
-{
-  "id": "health_scare",
-  "label": "Health Scare",
-  "description": "Health drops below 40 triggers a 3-step health event",
-  "preconditions": [
-    {"attribute": "health.physical", "operator": "Lt", "value": 40}
-  ],
-  "delay": 1,
-  "duration": 3,
-  "cooldown": 12,
-  "effects": [
-    {"attribute": "health.physical", "delta": -5},
-    {"attribute": "wealth.cash", "delta": -2000}
-  ]
-}
-```
-
-Events can optionally spawn a decision when they fire (`spawns_decision_id`).
+Weights: positive = maximize, negative = minimize. Cliffs: penalty when attribute drops below `min`.
 
 ### Group-Targeted Effects
-
-Instead of targeting individual attributes, target an entire group:
 
 ```json
 {"group": "wealth", "delta": -500}
 ```
 
-This expands to one effect per attribute in the "wealth" group. Also supports proportional scaling:
+Expands to one effect per attribute in the group. Also supports proportional scaling: `"scaling": [["wealth.cash", 0.05]]` means 5% of current value.
 
-```json
-{"attribute": "wealth.cash", "delta": 0, "scaling": [["wealth.cash", 0.05]]}
-```
-
-This means: `wealth.cash += 5% of current wealth.cash`.
-
-## Engine Traits (Custom Actions)
-
-loom-core exports three traits for building custom logic:
+## Engine Traits
 
 ```rust
 pub trait Predicate: Debug { fn evaluate(&self, state: &[f64]) -> bool; }
@@ -217,34 +242,96 @@ pub trait Action: Debug     { fn apply(&self, state: &mut [f64]); }
 pub trait Valuation: Debug  { fn score(&self, state: &[f64]) -> f64; }
 ```
 
-Plus compositors: `All`, `Any`, `Sequence`, `When`, `OneOf`. Use `Simulation::run_dynamic()` to run the engine with trait objects directly:
+Compositors: `All`, `Any`, `Sequence`, `When`, `OneOf`. Use `Simulation::run_dynamic()` for trait objects:
 
 ```rust
-let precondition = All(vec![
-    Box::new(condition1),
-    Box::new(condition2),
-]);
-let cost = Sequence(vec![Box::new(effect1), Box::new(effect2)]);
-let outcomes: &[(f64, Option<&dyn Predicate>, &dyn Action)] = &[...];
 let sim = Simulation::new(horizon, runs);
 let result = sim.run_dynamic(&state, &precondition, &cost, &outcomes, &goal);
 ```
 
-Built-in types (`Condition`, `AttributeEffect`, `Transform`, `GoalVector`) implement these traits, so existing configs work unchanged. Custom `Action`/`Predicate` implementations slot into the same engine — build domain-specific dynamics without touching the engine.
+Built-in types (`Condition`, `AttributeEffect`, `Transform`, `GoalVector`) implement these traits. Custom implementations slot into the same engine.
 
-## Timeline — Git-for-Life
+## Pareto Frontier
 
-A **timeline** is a named journal tied to a schema. You append **snapshots** — ordered state vectors with journal entries. Each snapshot links to its parent, forming a chain.
+```rust
+use loom_core::pareto_frontier;
 
-- **Fork** at any snapshot to create a parallel timeline (explore a what-if branch)
-- **Attach forecasts** to snapshots when you make a decision — record what the simulation predicted
-- **Resolve outcomes** later: record what actually happened, compare against the forecast
-- **Events** auto-fire each step based on preconditions, with delay/duration/cooldown management
+let scores = vec![
+    ("Take job".into(), vec![142.0, -5.0]),      // (wealth utility, stress impact)
+    ("Stay put".into(), vec![50.0, 15.0]),
+];
+let frontier = pareto_frontier(&scores);  // → vec![0]  (Take job dominates)
+```
+
+Multi-objective ranking without scalarizing to a single number.
+
+## Batch Comparison
+
+```rust
+use loom_core::batch_compare;
+
+let results = batch_compare(&state, &decisions, &passives, &events, &goal, 24, 1000);
+// → Vec<(decision_label, DecisionAnalysis)> sorted by utility desc
+```
+
+Compare N decisions against the same initial state with shared events/passives.
+
+## Timed Decisions (Projects)
+
+Multi-step decisions that tick over N steps with interruption support:
+
+```json
+{
+  "id": "rust_certification",
+  "label": "Rust Certification",
+  "preconditions": [{"attribute": "skills.rust", "operator": "Gt", "value": 50}],
+  "cost": [{"attribute": "time_free", "delta": -10}],
+  "duration": 8,
+  "on_complete": {"type": "declarative", "effects": [{"attribute": "skills.rust", "delta": 20}]},
+  "interrupt": {
+    "event_ids": ["health_scare", "burnout"],
+    "on_interrupt": {"type": "declarative", "effects": [{"attribute": "health.stress", "delta": 10}]}
+  }
+}
+```
+
+## Timeline
+
+A named journal tied to a schema. Append snapshots — ordered state vectors with journal entries. Each snapshot links to its parent, forming a chain.
+
+- **Fork** at any snapshot to create a parallel timeline
+- **Attach forecasts** — record what the simulation predicted
+- **Resolve outcomes** — record what actually happened, compare against forecast
+- **Events** auto-fire each step with delay/duration/cooldown management
+
+## Architecture
+
+```
+Config Layer (JSON/DB)
+  NamedDecision, NamedEvent, NamedEffect, …
+  ↓ resolve(&AttributeSchema)
+Engine (loom-core)
+  Predicate → Action → Valuation
+  Monte Carlo simulation on Vec<f64>
+  ↓
+Store (loom-store)
+  SQLite: schemas, decisions, passives, goals, events, timelines
+  ↓
+TUI (loom-tui)
+  Dashboard, Fork Explorer, 3-tab legacy view
+```
+
+Three crates:
+- **loom-core** — Engine. Traits, compositors, MC simulation, scoring, event core, Pareto frontier.
+- **loom-store** — SQLite persistence. CRUD, timeline, event runtime, template system.
+- **loom-tui** — Terminal UI. Dashboard, Fork Explorer, config editors, timeline browser.
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the full design.
 
 ## Tests
 
 ```bash
-cargo test  # 54 tests, all pass
+cargo test  # 70 tests, all pass
 ```
 
 ## License
