@@ -5,8 +5,8 @@ use loom_core::{
     NamedDecision, NamedEffect, NamedGoalVector, NamedOutcome, NamedPassiveEffect, PassiveEffect,
     Simulation,
 };
+use loom_store::{AppliedEventEffect, DecisionVariant, NamedEvent};
 use loom_store::{ForkRow, SchemaSummary, SnapshotRow, Store, TimelineStore, TimelineSummary};
-use loom_store::{AppliedEventEffect, NamedEvent};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -221,6 +221,8 @@ pub struct App {
 
     pub active_events_status: Vec<String>, // Display strings for active events on current timeline
     pub last_event_effects: Vec<AppliedEventEffect>, // Effects from last append
+    /// Generated decisions from active events: (event_id, event_label, DecisionVariant)
+    pub generated_decisions: Vec<(String, String, DecisionVariant)>,
 
     // ── Timeline state ──────────────────────────────────────────────────────────
     /// Tab: 0=Timeline, 1=Explore, 2=Config
@@ -357,6 +359,7 @@ impl App {
 
             active_events_status: Vec::new(),
             last_event_effects: Vec::new(),
+            generated_decisions: Vec::new(),
             tab: 0,
             timelines: Vec::new(),
             active_timeline_id: None,
@@ -615,6 +618,19 @@ impl App {
                         s.entry_text.clone()
                     };
                     self.dashboard_recent.push((s.created_at.clone(), entry_preview));
+                }
+            }
+        }
+
+        // 4. Fetch generated decisions from active events
+        self.generated_decisions.clear();
+        if let Some(timeline_id) = self.active_timeline_id {
+            let ts = TimelineStore::new(&self.store.conn);
+            if let Ok(gens) = ts.get_active_event_generated_decisions(timeline_id) {
+                for (event_id, event_label, variants) in gens {
+                    for variant in variants {
+                        self.generated_decisions.push((event_id.clone(), event_label.clone(), variant));
+                    }
                 }
             }
         }
@@ -1350,6 +1366,87 @@ impl App {
         self.fork_explorer_snapshot_id = Some(head_snapshot_id);
         self.fork_explorer_fork_name = fork_name;
         self.screen = Screen::ForkExplorer;
+    }
+
+    /// Apply a generated decision from an active event to the current state.
+    /// The generated decision's cost is applied, and outcomes are evaluated
+    /// against the current state to determine which branch fires.
+    pub fn apply_generated_decision(&mut self, event_id: &str, variant_label: &str) {
+        // Find the variant
+        let variant = match self
+            .generated_decisions
+            .iter()
+            .find(|(eid, _, v)| eid == event_id && v.label == variant_label)
+        {
+            Some((_, _, v)) => v.clone(),
+            None => return,
+        };
+
+        let schema = self.schema.clone();
+        let mut values = self.current_state.as_slice().to_vec();
+
+        // Helper: apply named effect to values
+        let apply_named_effect = |values: &mut Vec<f64>, eff: &NamedEffect| {
+            if let Some(ref attr_name) = eff.attribute {
+                if let Some(idx) = schema.index_of(attr_name) {
+                    if idx < values.len() {
+                        values[idx] += eff.delta;
+                    }
+                }
+            }
+            // Note: group effects not handled for simplicity
+        };
+
+        // Apply deterministic costs
+        for effect in &variant.cost {
+            apply_named_effect(&mut values, effect);
+        }
+
+        // Apply outcomes: weighted random selection using simple PRNG
+        let total_weight: f64 = variant.outcomes.iter().map(|o| o.weight).sum();
+        if total_weight > 0.0 {
+            // Simple deterministic pseudo-random using current values
+            let seed: u64 = values.iter().fold(0u64, |a, v| {
+                a.wrapping_mul(6364136223846793005)
+                    .wrapping_add(v.to_bits())
+            });
+            let roll = (seed as f64 / u64::MAX as f64) * total_weight;
+            let mut cumulative = 0.0;
+            for outcome in &variant.outcomes {
+                cumulative += outcome.weight;
+                if roll <= cumulative {
+                    // Apply this outcome's effects from the transform
+                    if let loom_core::NamedTransform::Declarative { effects, .. } = &outcome.transform {
+                        for effect in effects {
+                            apply_named_effect(&mut values, effect);
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+
+        self.current_state = DynamicState::from_vec(values, schema);
+
+        // Append snapshot to master
+        let master_id = match self.active_timeline_id {
+            Some(id) => id,
+            None => return,
+        };
+        let entry_text = format!(
+            "⚡ Event decision: {} → {}",
+            event_id, variant_label
+        );
+        let parent_id = self.snapshots.last().map(|s| s.id);
+        let ts = TimelineStore::new(&self.store.conn);
+        let _ = ts.append_snapshot(
+            master_id,
+            parent_id,
+            &entry_text,
+            &self.current_state.as_slice().to_vec(),
+        );
+        self.load_snapshots(master_id);
+        self.refresh_dashboard();
     }
 
     /// Apply the selected fork explorer decision to the master timeline:

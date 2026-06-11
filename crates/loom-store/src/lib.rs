@@ -22,7 +22,7 @@ pub mod event;
 pub mod template;
 pub mod timeline;
 
-pub use event::{AppliedEventEffect, NamedEvent, PreconditionMode};
+pub use event::{AppliedEventEffect, DecisionVariant, NamedEvent, PreconditionMode};
 pub use template::Template;
 pub use timeline::{ForkRow, SnapshotRow, TimelineRow, TimelineStore, TimelineSummary};
 
@@ -192,6 +192,13 @@ impl Store {
                      ALTER TABLE events ADD COLUMN triggers_on_resolve TEXT;
                      ALTER TABLE events ADD COLUMN priority INTEGER NOT NULL DEFAULT 0;
                      ALTER TABLE events ADD COLUMN precondition_mode TEXT NOT NULL DEFAULT 'All';",
+                )?;
+            }
+
+            // Phase 3: decision templates for event-generated decisions
+            if !existing.contains(&"decision_templates_json".to_string()) {
+                self.conn.execute_batch(
+                    "ALTER TABLE events ADD COLUMN decision_templates_json TEXT NOT NULL DEFAULT '[]';",
                 )?;
             }
         }

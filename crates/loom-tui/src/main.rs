@@ -1201,6 +1201,13 @@ fn handle_dashboard(app: &mut App, code: KeyCode) {
         KeyCode::Char('r') | KeyCode::Char('R') => {
             app.refresh_dashboard();
         }
+        KeyCode::Char('g') | KeyCode::Char('G') => {
+            // Apply first available generated decision
+            if let Some((event_id, _, variant)) = app.generated_decisions.first().cloned() {
+                let label = variant.label.clone();
+                app.apply_generated_decision(&event_id, &label);
+            }
+        }
         KeyCode::Char('f') | KeyCode::Char('F') => {
             app.open_fork_explorer();
         }

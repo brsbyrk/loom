@@ -184,6 +184,38 @@ fn seed_personal_events(store: &Store, schema: &str) -> Result<(), Box<dyn std::
                 NamedEffect::fixed("health.stress", -5.0),
             ],
             spawns_decision_id: None,
+            decision_templates: vec![
+                loom_store::DecisionVariant {
+                    label: "Invest bonus immediately".into(),
+                    cost: vec![NamedEffect::fixed("wealth.cash", -8000.0)],
+                    outcomes: vec![
+                        NamedOutcome {
+                            label: "Good returns".into(),
+                            weight: 70.0,
+                            condition: None,
+                            transform: NamedTransform::Declarative {
+                                effects: vec![NamedEffect::fixed("wealth.stocks", 10000.0)],
+                                conditional: vec![],
+                                default_conditional: vec![],
+                            },
+                        },
+                    ],
+                },
+                loom_store::DecisionVariant {
+                    label: "Keep as cash buffer".into(),
+                    cost: vec![],
+                    outcomes: vec![NamedOutcome {
+                        label: "Safety net".into(),
+                        weight: 100.0,
+                        condition: None,
+                        transform: NamedTransform::Declarative {
+                            effects: vec![NamedEffect::fixed("health.stress", -10.0)],
+                            conditional: vec![],
+                            default_conditional: vec![],
+                        },
+                    }],
+                },
+            ],
             ..Default::default()
         },
         // 4. social_conflict

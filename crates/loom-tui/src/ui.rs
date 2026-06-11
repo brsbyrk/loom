@@ -2270,6 +2270,23 @@ fn render_dashboard(f: &mut Frame, app: &App) {
         }
     }
 
+    // Append generated decisions from active events
+    if !app.generated_decisions.is_empty() {
+        decision_lines.push(Line::raw(""));
+        decision_lines.push(Line::from(Span::styled(
+            " ⚡ Event-generated decisions:",
+            Style::default().fg(YELLOW).bold(),
+        )));
+        for (_event_id, event_label, variant) in &app.generated_decisions {
+            decision_lines.push(Line::from(vec![
+                Span::styled(
+                    format!("    {} → {}", event_label, variant.label),
+                    Style::default().fg(GOOD),
+                ),
+            ]));
+        }
+    }
+
     let decisions_block = Paragraph::new(decision_lines)
         .block(
             Block::default()
@@ -2314,6 +2331,8 @@ fn render_dashboard(f: &mut Frame, app: &App) {
         Span::raw("simulate  "),
         Span::styled(" F ", Style::default().fg(ACCENT).bold()),
         Span::raw("fork  "),
+        Span::styled(" G ", Style::default().fg(ACCENT).bold()),
+        Span::raw("event decision  "),
         Span::styled(" R ", Style::default().fg(ACCENT).bold()),
         Span::raw("refresh  "),
         Span::styled(" L ", Style::default().fg(ACCENT).bold()),
